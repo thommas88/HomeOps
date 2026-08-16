@@ -855,4 +855,11 @@ Sensitive information is intentionally excluded. Credentials, authentication tok
 
 Internal addresses, hostnames, and diagrams may also be simplified or sanitized where appropriate.
 
+
+## AI Assistance
+
+AI tools were used to assist with documentation structure, wording, and review.
+
+The homelab architecture, configuration, implementation, troubleshooting, and technical decisions documented in this repository are my own work.
+
 Some systems are intentionally experimental and may be stopped, rebuilt, or removed as the lab evolves.
