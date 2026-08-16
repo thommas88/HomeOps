@@ -23,6 +23,8 @@ The goal is not simply to run self-hosted applications. I use the lab to gain pr
 
 The repository is intended both as operational documentation and as a technical portfolio.
 
+![nodes](screenshots/20260725_190248.jpg)
+
 ---
 
 ## Architecture
@@ -43,59 +45,7 @@ Storage-heavy workloads remain on `pve-main`, while supporting infrastructure su
 
 ### High-Level Architecture
 
-```mermaid
-flowchart TB
-    ADMIN["Fedora Administration PC"]
-    NET["Omada Network<br/>Gateway • Switching • Wi-Fi • VLANs"]
-
-    subgraph MAIN["pve-main"]
-        TRUENAS["TrueNAS"]
-        IMMICH["Immich"]
-        LINUX["Linux / Debian Server"]
-        SAT["Satisfactory"]
-        K8S["Kubernetes Lab"]
-    end
-
-    subgraph PRODESK["prodesk"]
-        PBS["Proxmox Backup Server"]
-        PI1["Pi-hole DNS 1"]
-        HA["Home Assistant"]
-        OMADA["Omada Controller"]
-        DASH["Homepage Dashboard"]
-    end
-
-    subgraph ELITE["elitedesk"]
-        PI2["Pi-hole DNS 2"]
-    end
-
-    subgraph GAME["pve-game-server"]
-        GAMES["Palworld / Valheim"]
-        PLAYIT["Playit.gg"]
-    end
-
-    subgraph OFFSITE["Offsite ThinkCentre M900"]
-        KUMA["Uptime Kuma"]
-        TS["Tailscale"]
-    end
-
-    ADMIN --> NET
-    NET --> MAIN
-    NET --> PRODESK
-    NET --> ELITE
-    NET --> GAME
-
-    LINUX --> SAT
-    IMMICH --> TRUENAS
-    MAIN --> PBS
-    GAME --> PBS
-
-    PI1 -. DNS redundancy .- PI2
-    KUMA -. external monitoring .-> MAIN
-    KUMA -. external monitoring .-> PRODESK
-    KUMA -. external monitoring .-> ELITE
-    KUMA -. external monitoring .-> GAME
-    TS -. remote administration .-> NET
-```
+![nodes](diagrams/deployment-architecture.png)
 
 Detailed diagrams are kept under [`docs/architecture/`](docs/architecture/) and [`diagrams/`](diagrams/).
 
