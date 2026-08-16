@@ -6,6 +6,7 @@ The node is the main local storage and virtualization platform. Following the Se
 
 Detailed configuration for individual applications is documented under [`../services/`](../services/).
 
+![proxmox](../../screenshots/proxmox-fractal-server.png)
 ---
 
 ## Overview
