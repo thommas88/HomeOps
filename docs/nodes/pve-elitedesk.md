@@ -8,6 +8,9 @@ The EliteDesk now has a deliberately narrow role: **provide physically separate 
 
 Detailed Pi-hole configuration is documented under [`../services/pihole.md`](../services/pihole.md).
 
+
+![proxmox](../../screenshots/proxmox-elitedesk.png)
+
 ---
 
 ## Overview
