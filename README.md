@@ -199,6 +199,9 @@ The core hardware is:
 
 The network is centrally managed through Omada.
 
+
+![network](screenshots/20260816_175343.jpg)
+
 ---
 
 ### Storage
