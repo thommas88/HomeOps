@@ -5,7 +5,7 @@ This document describes the ProDesk Proxmox node used for backup, core infrastru
 The node became a central infrastructure host during the Server 2.0 cleanup and migration. Several services previously spread across other systems were consolidated here to create a clearer workload layout and more consistent VM/LXC numbering.
 
 Detailed configuration for individual services is documented under [`../services/`](../services/).
-
+![proxmox](../../screenshots/proxmox-prodesk.png)
 ---
 
 ## Overview
