@@ -6,6 +6,9 @@ The node exists to separate externally reachable, frequently updated, and restar
 
 Detailed game-server configuration is documented in [`../services/game-servers.md`](../services/game-servers.md).
 
+
+![proxmox](../../screenshots/proxmox-fractal-gameserver.png)
+
 ---
 
 ## Overview
