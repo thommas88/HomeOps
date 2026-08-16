@@ -82,6 +82,11 @@ The system combines virtualization capacity with a comparatively large number of
 
 The HBA is important because it allows TrueNAS to manage the storage disks directly rather than using virtual disks created by Proxmox.
 
+
+![case](../../screenshots/20260221_162735.jpg)
+
+![case](../../screenshots/20260221_163056.jpg)
+
 ---
 
 # Storage
@@ -145,6 +150,9 @@ ZFS pools / datasets
 ```
 
 This gives TrueNAS direct control of the storage devices and allows ZFS to manage the physical disks as intended.
+
+PCI-e HBA card
+![case](../../screenshots/20251202_183601.jpg)
 
 ---
 
@@ -322,6 +330,9 @@ Detailed networking is documented in:
 - [`../network/ip-plan.md`](../network/ip-plan.md)
 - [`../network/acl-policy.md`](../network/acl-policy.md)
 - [`../network/port-mapping.md`](../network/port-mapping.md)
+
+PCI-e NIC
+![NIC](../../screenshots/20251201_185942.jpg)
 
 ---
 
