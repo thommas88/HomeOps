@@ -224,7 +224,6 @@ The main Proxmox server is the largest local compute and storage host.
 |---|---|
 | CPU | Intel Core i9-9900K |
 | Memory | 64 GB DDR4 |
-| GPU | NVIDIA GTX 1070 Ti |
 | NIC | Intel I226-T1 2.5 GbE |
 | HBA | LSI 9207-8i, IT mode |
 | Primary NVMe | Samsung 970 EVO Plus 1 TB |
@@ -638,22 +637,34 @@ Local switching may continue, but routed network access, inter-VLAN routing, and
 
 ---
 
-## Local Power Failure
+## Power-Loss Protection
 
-The homelab currently does not have UPS protection.
+The homelab is protected by a CyberPower CP1600EPFCLCD UPS rated at 1600 VA / 1000 W.
 
-A complete local power failure can therefore affect:
+The UPS is integrated with Network UPS Tools (NUT) and monitored through Home Assistant. This provides visibility into:
 
-- router
-- switches
-- access point
-- all four local Proxmox hosts
-- TrueNAS storage
-- local services
+- UPS load
+- battery charge
+- input voltage
+- estimated runtime
+- online/battery status
+- power-loss events
 
-The offsite ThinkCentre can remain operational and may detect the outage externally.
+Selected compute and infrastructure systems connected to the UPS can perform controlled shutdown procedures when the UPS reaches defined thresholds. Network equipment connected to the UPS remains protected during short outages, but does not necessarily participate in the same controlled shutdown sequence.
 
-UPS / power-loss protection remains part of the roadmap.
+The UPS reduces the risk of:
+
+- abrupt power loss
+- filesystem and service corruption
+- interrupted backup jobs
+- uncontrolled shutdown of Proxmox hosts
+- loss of network connectivity during short outages
+
+The UPS does not provide unlimited runtime. A prolonged power outage can still interrupt services once the battery capacity is exhausted. Systems that are not connected to the UPS may also become unavailable immediately during a power failure.
+
+The offsite monitoring node remains useful because it can detect outages at the primary homelab location even if local services and monitoring systems lose power.
+
+Remaining work includes refining shutdown thresholds, validating recovery after longer outages, improving alerting, and documenting the exact power and shutdown dependencies for each protected system.
 
 ---
 

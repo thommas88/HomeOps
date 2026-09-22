@@ -379,7 +379,7 @@ A VM backup provides broad recovery, while game-specific save backups provide fa
 
 ## Proxmox Backup Server
 
-The game-server node can use the PBS instance hosted on `elitedesk`.
+The game-server node can use the PBS instance hosted on `ProDesk`.
 
 ```text
 pve-game-server
@@ -388,7 +388,7 @@ pve-game-server
 PBS
       │
       ▼
-elitedesk
+ProDesk
 ```
 
 This places the backup target on different physical hardware from the game-server host.

@@ -63,7 +63,7 @@ Primary storage and virtualization host.
 
 - Intel Core i9-9900K
 - 64 GB DDR4
-- NVIDIA GTX 1070 Ti
+- NVIDIA GTX 1070 Ti(Removed for now for lower power consuption as it was not used)
 - Intel I226-T1 2.5 GbE NIC
 - LSI 9207-8i HBA in IT mode
 - 1 TB Samsung 970 EVO Plus NVMe
@@ -773,6 +773,7 @@ homelab/
 - [x] Node-based VMID cleanup
 - [x] ES216G recovery and re-adoption completed
 - [x] Core architecture diagrams created
+- [x] UPS/power-loss protection
 
 ### In Progress / Planned
 
@@ -783,7 +784,7 @@ homelab/
 - [ ] Continue network and management-plane hardening
 - [ ] Convert remaining notes into structured repo documentation
 - [ ] Revisit the Kubernetes lab
-- [ ] Add UPS/power-loss protection
+
 
 ---
 
@@ -801,7 +802,6 @@ homelab/
 ### Medium Term
 
 - Improve offsite backup coverage
-- Add UPS protection
 - Improve monitoring and alerting
 - Continue security hardening
 - Add more reusable operational runbooks

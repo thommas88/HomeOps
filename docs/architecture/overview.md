@@ -281,6 +281,37 @@ A backup of the TrueNAS VM does not constitute a backup of the physical data sto
 
 ---
 
+## Power-Loss Protection
+
+The homelab uses a CyberPower CP1600EPFCLCD UPS rated at 1600 VA / 1000 W. It provides short-term power protection for selected homelab hosts and network equipment.
+
+The UPS is monitored through Network UPS Tools (NUT) and Home Assistant. This provides visibility into:
+
+- battery charge
+- current load
+- input voltage
+- estimated runtime
+- online or battery status
+- power-loss events
+
+When utility power is lost, connected systems can perform a controlled shutdown based on the UPS state and configured thresholds. The staged shutdown behavior has been tested during controlled power-loss tests.
+
+The UPS helps reduce the risk of:
+
+- abrupt shutdown of Proxmox hosts
+- interrupted backup jobs
+- filesystem or service corruption
+- loss of network connectivity during short outages
+- inconsistent service state after a power failure
+
+The UPS does not provide unlimited runtime and does not protect equipment that is not connected to it. A prolonged outage can therefore still make parts of the local homelab unavailable.
+
+The offsite ThinkCentre M900 remains valuable as an independent monitoring point because it can detect an outage even when local systems and monitoring services lose power.
+
+Further documentation should define the exact protected devices, shutdown order, configured thresholds, alerting behavior, and recovery procedure after a longer outage.
+
+---
+
 # Offsite Layer
 
 The ThinkCentre M900 is physically separated from the main homelab.
@@ -683,6 +714,7 @@ The main remaining workload migration is Satisfactory from `pve-main` to `pve-ga
 
 The current architecture can be summarized as:
 
+- UPS-backed power-loss protection for selected infrastructure
 - Four local Proxmox hosts with distinct responsibilities
 - One offsite Debian monitoring/utility node
 - TrueNAS-based centralized storage on `pve-main`

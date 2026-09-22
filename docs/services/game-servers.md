@@ -15,7 +15,7 @@ The current environment actively hosts Palworld and Valheim on the dedicated gam
 | Physical host | `pve-game-server` |
 | Proxmox management network | `INFRA` / VLAN 10 |
 | Game VM | `GamesVM` |
-| VM ID | `100` |
+| VM ID | `400` |
 | Game network | `GAME-DMZ` / VLAN 25 |
 | Game VM address | `192.168.25.10` |
 | CPU | 8 vCPU |
@@ -55,7 +55,7 @@ flowchart TB
 
     subgraph GAMEHOST["pve-game-server"]
         PVEGAME["Proxmox VE"]
-        GAMESVM["VM 100 — GamesVM"]
+        GAMESVM["VM 400 — GamesVM"]
         PAL["Palworld"]
         VAL["Valheim"]
 
@@ -118,7 +118,7 @@ Node documentation:
 The primary game-server VM is:
 
 ```text
-VM 100 — GamesVM
+VM 400 — GamesVM
 ```
 
 Current verified VM configuration:
@@ -905,7 +905,7 @@ Current confirmed state:
 
 - Physical host: `pve-game-server`
 - GamesVM: active
-- VM ID: `100`
+- VM ID: `400`
 - CPU: 8 vCPU
 - Memory: 24 GiB
 - Disk: 300 GB

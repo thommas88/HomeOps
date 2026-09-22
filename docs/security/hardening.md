@@ -755,7 +755,6 @@ Potential hardening improvements include:
 - add automated ZFS snapshots
 - improve offsite backup coverage
 - continue restore testing
-- consider UPS protection for critical infrastructure
 - periodically review public repository content for sensitive information
 - continue removing obsolete services and configuration
 

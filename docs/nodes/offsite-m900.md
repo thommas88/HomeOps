@@ -2,7 +2,7 @@
 
 This document describes the Lenovo ThinkCentre M900 used as the offsite monitoring and utility node for the homelab.
 
-Unlike the three local Proxmox hosts, the M900 is physically located at a separate site and runs Debian directly.
+Unlike the four local Proxmox hosts, the M900 is physically located at a separate site and runs Debian directly.
 
 Its main purpose is to provide services that remain useful when the primary homelab location is unavailable.
 
@@ -43,7 +43,7 @@ The node currently has three main responsibilities:
 
 The M900 is **not** the primary Proxmox backup node.
 
-That role belongs to Proxmox Backup Server on [`pve-elitedesk`](pve-elitedesk.md).
+That role belongs to Proxmox Backup Server on [`pve-prodesk`](pve-prodesk.md).
 
 ---
 
@@ -315,7 +315,7 @@ Its architecture is therefore based on **site separation** rather than VLAN sepa
 
 The M900 and PBS have different roles.
 
-### EliteDesk / PBS
+### ProDesk / PBS
 
 Primary purpose:
 
@@ -432,7 +432,7 @@ The M900 remains available because it does not run on Proxmox at the primary sit
 
 ---
 
-## EliteDesk / PBS Failure
+## ProDesk / PBS Failure
 
 The M900 remains available.
 
@@ -636,7 +636,7 @@ Current confirmed role:
 - Offsite location: active
 - External homelab monitoring: active
 - Full TrueNAS offsite replication: not implemented
-- Primary Proxmox backup role: handled by `elitedesk`, not the M900
+- Primary Proxmox backup role: handled by `ProDesk`, not the M900
 
 The node should currently be described primarily as an **offsite monitoring and utility node with future backup potential**.
 
@@ -710,5 +710,5 @@ Those belong in dedicated service, security, or configuration documentation.
 - [`../security/backup-strategy.md`](../security/backup-strategy.md) — backup architecture
 - [`../services/uptime-kuma.md`](../services/uptime-kuma.md) — monitoring service
 - [`pve-main.md`](pve-main.md) — main infrastructure node
-- [`pve-elitedesk.md`](pve-elitedesk.md) — local backup/support node
+- [`pve-prodesk.md`](pve-prodesk.md) — local backup/support node
 - [`pve-gameserver.md`](pve-gameserver.md) — dedicated game-server node

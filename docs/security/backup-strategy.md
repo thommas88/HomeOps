@@ -815,21 +815,34 @@ Priority should be given to data that cannot easily be recreated.
 
 ---
 
-# Power-Loss Considerations
+# Power-Loss Protection
 
-The homelab does not currently have UPS protection documented as part of the active architecture.
+The homelab is protected by a CyberPower CP1600EPFCLCD UPS rated at 1600 VA / 1000 W.
 
-A complete power outage can therefore interrupt:
+The UPS is integrated with Network UPS Tools (NUT) and monitored through Home Assistant. This provides visibility into:
 
-- Proxmox hosts
-- PBS
-- TrueNAS
-- network infrastructure
-- active backup jobs
+- UPS load
+- battery charge
+- input voltage
+- estimated runtime
+- online/battery status
+- power-loss events
 
-The offsite monitoring node can help detect such an outage, but it does not prevent it.
+Selected infrastructure systems, including Proxmox hosts and network equipment, can perform controlled shutdown procedures when the UPS reaches defined thresholds. The staged shutdown behavior has been tested during controlled power-loss tests.
 
-UPS protection remains a useful future resilience improvement.
+The UPS reduces the risk of:
+
+- abrupt power loss
+- filesystem and service corruption
+- interrupted backup jobs
+- uncontrolled shutdown of Proxmox hosts
+- loss of network connectivity during short outages
+
+The UPS does not provide unlimited runtime. A prolonged power outage can still interrupt services once the battery capacity is exhausted. Systems that are not connected to the UPS may also become unavailable immediately during a power failure.
+
+The offsite monitoring node remains useful because it can detect outages at the primary homelab location even if local services and monitoring systems lose power.
+
+Remaining work includes refining shutdown thresholds, validating recovery after longer outages, improving alerting, and documenting the exact power and shutdown dependencies for each protected system.
 
 ---
 
@@ -925,7 +938,7 @@ Current confirmed state:
 - Full NAS backup: not implemented
 - Full offsite backup: not implemented
 - Restore testing: recommended / ongoing roadmap item
-- UPS protection: not currently part of the documented active architecture
+- UPS protection: active for selected infrastructure systems
 
 ---
 

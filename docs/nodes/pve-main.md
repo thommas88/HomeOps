@@ -73,7 +73,6 @@ Experimental workloads are intentionally treated as lower priority than the core
 | Memory | 64 GB DDR4 |
 | Motherboard | ASUS ROG Strix Z390-F Gaming |
 | CPU cooler | Noctua NH-D15 |
-| GPU | NVIDIA GTX 1070 Ti |
 | Primary NIC | Intel I226-T1 2.5 GbE |
 | HBA | LSI 9207-8i, IT mode |
 | Chassis | Fractal Design Define 7 |
