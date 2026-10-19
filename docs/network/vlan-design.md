@@ -1,660 +1,258 @@
-# VLAN Design
+# VLAN Design and Security Zones
 
-This document describes the VLAN architecture and trust-zone design used in the homelab.
+> **Public architecture documentation** — This file explains the network segmentation model, trust boundaries, and design decisions used in the HomeOps homelab. It is not a live configuration export, asset inventory, or proof of comprehensive network isolation.
 
-The network is segmented by role and trust level rather than operating as one flat LAN. Infrastructure, trusted clients, public-facing game workloads, IoT devices, and guest devices are placed in separate VLANs with different communication expectations.
+## Purpose and Scope
 
-Detailed IP addressing belongs in [`ip-plan.md`](ip-plan.md), while the implemented inter-VLAN access rules belong in [`acl-policy.md`](acl-policy.md).
+HomeOps uses VLANs to separate devices and workloads by **role and trust level**, rather than operating everything on one flat LAN. Inter-VLAN communication is governed by a defined access-control policy, with limited exceptions for shared infrastructure services.
 
----
+The goals are to:
 
-## Overview
+- Reduce unnecessary lateral movement between device classes.
+- Keep infrastructure management separate from personal clients and externally reachable workloads.
+- Isolate IoT and guest endpoints from private resources.
+- Allow only the cross-zone communication needed to operate services.
+- Make the architecture understandable, testable, and maintainable.
 
-| VLAN | Name | Purpose |
-|---:|---|---|
-| 1 | `DEFAULT` | Restricted legacy/default network |
-| 10 | `INFRA` | Infrastructure, servers, management interfaces |
-| 20 | `TRUSTED` | Trusted personal and administrative clients |
-| 25 | `GAME-DMZ` | Externally reachable game-server workloads |
-| 30 | `IOT` | Smart-home and lower-trust IoT devices |
-| 40 | `GUEST` | Guest clients with Internet access only |
-
-The design follows:
-
-```text
-Different role / trust level
-          │
-          ▼
-      Separate VLAN
-          │
-          ▼
-Explicit communication policy
-```
+This document describes **zone design and intended relationships**. Address allocation is documented in [`ip-plan.md`](ip-plan.md), inter-VLAN policy in [`acl-policy.md`](acl-policy.md), and switching concepts in [`port-mapping.md`](port-mapping.md).
 
 ---
 
-# Design Goals
+## 1. Security-Zone Overview
 
-The VLAN design is intended to:
+| VLAN | Zone | Purpose | Trust consideration |
+|---:|---|---|---|
+| 1 | `DEFAULT` | Restricted legacy/default network | Not for normal client use |
+| 10 | `INFRA` | Infrastructure, management, and internal services | Sensitive operational systems |
+| 20 | `TRUSTED` | Trusted personal and administrative clients | Approved origin for routine management |
+| 25 | `GAME-DMZ` | Game-server workloads | Externally oriented application risk |
+| 30 | `IOT` | Smart-home and embedded devices | Lower-trust managed and consumer devices |
+| 40 | `GUEST` | Temporary and untrusted clients | Internet-focused, limited internal access |
 
-- reduce unnecessary lateral movement
-- separate infrastructure from normal clients
-- isolate externally reachable workloads
-- restrict IoT devices
-- isolate guest devices
-- keep administration on trusted paths
-- allow only required cross-VLAN communication
-- make the network easier to reason about and troubleshoot
+VLAN membership provides **Layer 2 separation**. It does not, on its own, prevent routed communication between zones. That boundary is enforced through the gateway's inter-VLAN access-control policy.
 
-The network therefore uses broad separation first, followed by narrow exceptions where functionality requires communication between zones.
-
----
-
-# High-Level Model
+### High-Level Trust Model
 
 ```mermaid
 flowchart LR
-    TRUSTED["TRUSTED<br/>VLAN 20"]
-    INFRA["INFRA<br/>VLAN 10"]
-    GAME["GAME-DMZ<br/>VLAN 25"]
-    IOT["IOT<br/>VLAN 30"]
-    GUEST["GUEST<br/>VLAN 40"]
-    DEFAULT["DEFAULT<br/>VLAN 1"]
-    INTERNET["Internet"]
-
-    TRUSTED --> INFRA
-    GAME --> INTERNET
-    IOT --> INTERNET
-    GUEST --> INTERNET
-    INFRA --> INTERNET
-
-    GAME -. restricted .-> INFRA
-    IOT -. restricted .-> INFRA
-    GUEST -. blocked .-> INFRA
-    DEFAULT -. restricted .-> INFRA
+    T[TRUSTED] -->|Approved administration| I[INFRA]
+    G[GAME-DMZ] -->|Required shared services only| I
+    D[IOT] -->|Required shared services only| I
+    U[GUEST] -->|Required shared services only| I
+    H[Home Assistant in INFRA] -->|Specific IoT control exception| D
+    G --> N[Internet]
+    D --> N
+    U --> N
+    T --> N
+    I --> N
 ```
 
-This diagram represents the intended trust relationships, not the exact Gateway ACL rule order.
+**Interpretation:** Arrows show *intended permitted communication categories*, not unrestricted reachability. The shared-service arrows do **not** grant general access to `INFRA`; their effective scope depends on gateway and host policy. The diagram omits implementation details and does not replace an ACL review.
 
 ---
 
-# VLAN 1 — DEFAULT
+## 2. Zone Responsibilities
 
-`DEFAULT` is retained as a restricted legacy/default network.
+### VLAN 1 — `DEFAULT`
 
-Subnet:
+`DEFAULT` is retained for limited legacy/default-network requirements. It is **not** the normal trusted-client or administration zone.
 
-```text
-192.168.0.0/24
-```
+**Design rationale:** Keeping ordinary clients off the default network makes their intended security role explicit. Device-specific dependencies and management placement are recorded privately rather than exposed in this public architecture overview.
 
-Gateway:
+### VLAN 10 — `INFRA`
 
-```text
-192.168.0.1
-```
+`INFRA` houses core services and management interfaces, including categories such as:
 
-The ER605 management interface remains on this network.
+- Proxmox hypervisors and virtual infrastructure management
+- Storage, backup, and internal DNS services
+- Network management and monitoring
+- Internal applications and automation services
 
-`DEFAULT` is not used as the normal client or administration network.
+**Design rationale:** Infrastructure endpoints often have higher privileges and support multiple dependent services. Separating them from ordinary clients helps contain failures and reduces exposure to lower-trust endpoints.
 
-Its purpose is intentionally limited because relying on the default VLAN for normal trusted activity would make the trust model less explicit.
+`INFRA` is not intended to be generally reachable from `IOT`, `GUEST`, or `GAME-DMZ`. Specific service dependencies are handled through narrow policy exceptions.
 
----
+### VLAN 20 — `TRUSTED`
 
-# VLAN 10 — INFRA
+`TRUSTED` contains approved personal endpoints and the primary administration workstation.
 
-`INFRA` is the core infrastructure and management zone.
+Routine administrative sessions originate here, while infrastructure services remain on `INFRA`. This separates the *administrative client* from the *managed systems* without requiring the client to reside on the infrastructure VLAN.
 
-Subnet:
+**Design rationale:** Management access is deliberately directional. Permission for a trusted client to initiate administration does not mean that infrastructure systems should be free to initiate unrelated sessions into the trusted-client zone.
 
-```text
-192.168.10.0/24
-```
+### VLAN 25 — `GAME-DMZ`
 
-Typical systems include:
+`GAME-DMZ` is intended for game-server workloads that may accept connections from external players, including deployments using a relay or tunneling service such as Playit.gg.
 
-- Proxmox management interfaces
-- TrueNAS
-- Proxmox Backup Server
-- Pi-hole
-- Home Assistant
-- Immich
-- Omada Controller
-- Homepage
-- managed switches
-- access point management
-- JetKVM
+**Design rationale:** Game servers may run third-party software, change frequently, and receive traffic from outside the homelab. Isolating their workloads reduces the consequences of a compromised game service.
 
-Examples of current infrastructure addresses include:
+The architecture distinguishes **hypervisor management** from **guest workload networking**. A physical Proxmox host may be managed through `INFRA` while its hosted game workload uses `GAME-DMZ`.
 
-```text
-pve-main           192.168.10.10
-elitedesk          192.168.10.20
-prodesk            192.168.10.21
-pve-game-server    192.168.10.30
-TrueNAS            192.168.10.40
-PBS                192.168.10.50
-Home Assistant     192.168.10.70
-Immich             192.168.10.71
-Pi-hole 1          192.168.10.90
-Pi-hole 2          192.168.10.91
-Omada Controller   192.168.10.100
-```
+> Workload placement in this document is architectural intent, not a claim that every current or transitional deployment has been independently verified. The authoritative live VM-to-VLAN inventory is private.
 
-The complete addressing plan is documented in:
+### VLAN 30 — `IOT`
 
-[`ip-plan.md`](ip-plan.md)
+`IOT` is used for consumer smart-home devices, media equipment, and other embedded endpoints that do not require the same trust as administrative clients.
+
+**Design rationale:** These devices can have limited update support and external cloud dependencies. Their network access should match their function rather than inheriting broad access to trusted clients or infrastructure.
+
+Home Assistant runs as an infrastructure service, not as a general-purpose member of the IoT zone. Its device-control requirements are supported by a **targeted application exception** described below.
+
+### VLAN 40 — `GUEST`
+
+`GUEST` is intended for temporary or untrusted devices.
+
+**Design rationale:** Guest Internet connectivity should not imply access to internal services, workstations, or infrastructure. Shared services such as DNS may be made available without opening the rest of the internal network.
 
 ---
 
-## Why Infrastructure Has Its Own VLAN
+## 3. Cross-Zone Communication
 
-Infrastructure systems have a different trust role from user devices.
+The segmentation model is **deny-oriented for lower-trust access to internal networks**, with documented exceptions where functionality requires them.
 
-Separating them provides:
+| Source zone | Destination / service | Intended relationship |
+|---|---|---|
+| `TRUSTED` | `INFRA` | Approved administration and internal services |
+| `GAME-DMZ` | Internal zones | General access restricted; narrow shared-service exceptions |
+| `IOT` | Internal zones | General access restricted; narrow shared-service exceptions |
+| `GUEST` | Internal zones | General access restricted; narrow shared-service exceptions |
+| `INFRA` | `IOT` | Restricted by default; specific application exception |
+| Active zones | Internet | Available where required by role and policy |
 
-- clearer management boundaries
-- reduced accidental exposure
-- simpler ACL design
-- easier troubleshooting
-- better containment if a lower-trust endpoint is compromised
+This summary describes **new traffic initiated between zones**. It is not a firewall rule list. Return traffic, same-VLAN communication, IPv6, and host-based controls require separate consideration.
 
-Infrastructure is reachable from trusted administration paths, but lower-trust networks do not receive unrestricted access to it.
+For the more detailed but still public-safe policy matrix, see [`acl-policy.md`](acl-policy.md).
 
----
+### Shared DNS
 
-# VLAN 20 — TRUSTED
+Two Pi-hole instances provide internal DNS service. Lower-trust VLANs require name resolution without needing broad access to the infrastructure zone.
 
-`TRUSTED` contains devices considered appropriate for normal personal use and homelab administration.
+**Design principle:** Permit the required DNS service, not unrestricted access to the networks where the resolvers reside. Resolver endpoints, detailed rule objects, and client-specific configuration belong in private operational records.
 
-Subnet:
+### Home Assistant and IoT
 
-```text
-192.168.20.0/24
-```
+Home Assistant is hosted in `INFRA` but needs to initiate connections toward some devices in `IOT`.
 
-Typical examples include:
+**Design principle:** Grant the application only the connectivity it needs; do not use this dependency as a reason to permit general infrastructure-to-IoT traffic.
 
-- primary Fedora workstation
-- PS5
-- trusted personal devices where appropriate
+### External Game Services
 
-The primary administration workstation is located here.
+Game workloads may be made reachable to approved remote players through external connectivity services. Public reachability of an *application* should not imply public reachability of its hypervisor's management plane.
 
-The intended role is:
-
-```text
-TRUSTED
-   │
-   ▼
-Administration of INFRA
-```
-
-This allows management of Proxmox, TrueNAS, PBS, Omada, Pi-hole, Home Assistant, and other internal systems without placing the administration workstation directly inside the infrastructure VLAN.
+**Design principle:** Separate workload exposure, host management, and access-control policy. The exact exposure paths are intentionally not published here.
 
 ---
 
-# VLAN 25 — GAME-DMZ
+## 4. Virtual and Physical Networking
 
-`GAME-DMZ` contains game-server workloads.
+The homelab uses a TP-Link Omada-based network with an ER605 gateway, managed switching, and wireless access infrastructure.
 
-Subnet:
+- **Gateway:** Provides routing between the VLANs and enforces the documented gateway ACL policy.
+- **Managed switches:** Transport the required VLANs across access and trunk links.
+- **Proxmox hosts:** Support separation of host-management traffic from guest VM/LXC traffic using appropriate virtual and physical network configuration.
+- **Wireless access point:** Supports placing wireless clients in the appropriate zone rather than sharing one undifferentiated wireless LAN.
 
-```text
-192.168.25.0/24
-```
+The network uses a mix of access and trunk links as required by device roles. **Exact switchport assignments, VLAN allowlists, untagged/tagged memberships, and physical host connections are maintained privately.** See [`port-mapping.md`](port-mapping.md) for the public design principles.
 
-Current game-server VM:
+### Management-Plane Separation
 
-```text
-192.168.25.10
-```
+The design places routine infrastructure management in the infrastructure security model, with administration initiated from a trusted workstation.
 
-Current workloads include:
-
-- Palworld
-- Valheim
-
-Satisfactory is still hosted separately on `pve-main` and remains a migration exception.
-
-The physical `pve-game-server` management interface remains on `INFRA`, while the game VM is placed on `GAME-DMZ`.
+Some equipment may have legacy or device-specific management dependencies. Their exact locations and access paths are intentionally omitted here and must be checked against the private inventory when making changes.
 
 ---
 
-## Why Use a GAME-DMZ?
+## 5. Discovery and Address Assignment
 
-Game servers have a different risk profile because they may:
+### mDNS and Multicast
 
-- accept connections from external players
-- run third-party server software
-- receive frequent updates
-- expose services through Playit.gg
+The source documentation records **cross-VLAN mDNS/multicast forwarding as not generally enabled**. This avoids broad automatic service discovery between security zones.
 
-The game workloads therefore do not share the same trust zone as infrastructure management.
+If an application requires discovery across VLAN boundaries, the preferred approach is to identify the precise use case, evaluate the security impact, and deploy the smallest practicable exception rather than enabling unrestricted cross-zone discovery.
 
-Conceptually:
+### DHCP and Addressing
 
-```text
-INFRA
-└── Proxmox management
+Client address assignment uses DHCP where appropriate, while infrastructure services use stable addressing where dependencies require it. Subnets, gateway conventions, and DHCP scopes are described in [`ip-plan.md`](ip-plan.md).
 
-GAME-DMZ
-└── game-server workloads
-```
-
-A compromised game server should not automatically provide broad access to internal management systems.
+This file deliberately does not duplicate per-host IP addresses, reservations, DHCP ranges, or lease settings. Their authoritative operational records are kept separately.
 
 ---
 
-# VLAN 30 — IOT
+## 6. Design Rationale
 
-`IOT` contains smart-home and embedded devices.
+| Decision | Reason |
+|---|---|
+| Segment by trust level rather than by individual application | Keeps the model understandable and avoids unnecessary VLAN proliferation |
+| Use a distinct infrastructure zone | Separates sensitive services and management interfaces from clients |
+| Place administrative clients in `TRUSTED` | Preserves operational access without putting the workstation in the server zone |
+| Isolate game workloads | Limits lateral movement from externally oriented services |
+| Treat IoT devices as lower trust | Reduces the reach of consumer devices into private networks |
+| Keep guests separate | Provides Internet-oriented access without treating visitors as trusted |
+| Permit narrow shared-service exceptions | Preserves DNS and automation functionality without broad network permissions |
+| Restrict use of `DEFAULT` | Reduces dependence on a catch-all legacy network |
 
-Subnet:
-
-```text
-192.168.30.0/24
-```
-
-Examples include:
-
-- Samsung TV
-- Roborock
-- Nest Audio devices
-- other smart-home endpoints
-
-IoT devices are treated as lower-trust systems.
-
-The intended model is:
-
-```text
-IOT
- │
- ├── Internet where required
- ├── DNS
- └── restricted access to internal networks
-```
+These decisions describe the **security architecture**, not a guarantee that every individual traffic path is protected under all conditions.
 
 ---
 
-## Home Assistant Relationship
+## 7. Validation and Operational Review
 
-Home Assistant itself is not placed on the IoT VLAN.
+The original HomeOps documentation records all six VLANs and gateway ACL segmentation as active, with representative inter-VLAN paths function-tested. These statements are **historical documented observations**, not tests rerun as part of this rewrite.
 
-It runs on:
+Representative checks after significant changes should confirm that:
 
-```text
-INFRA / VLAN 10
-```
+1. `TRUSTED` can reach the infrastructure services it is authorized to manage.
+2. `GUEST`, `IOT`, and `GAME-DMZ` cannot initiate broad access to protected internal zones.
+3. Required shared DNS resolution remains available across the relevant zones.
+4. Home Assistant can reach the intended IoT devices without granting a broader exception.
+5. Externally oriented workloads remain separate from hypervisor management.
+6. Client addressing, Internet access, and intended service dependencies still function.
+7. Prohibited connections are explicitly tested, not assumed to be blocked because another test passed.
 
-and receives a specific exception to initiate traffic toward IoT devices.
+A representative functional test does **not** prove complete isolation. Full assurance also depends on VLAN tagging, Layer 2 behavior, gateway/host firewalls, alternate protocols and paths, and ongoing configuration drift detection.
 
-Conceptually:
-
-```text
-Home Assistant
-      │
-      │ allowed
-      ▼
-IOT
-```
-
-while broad IoT-to-infrastructure access remains restricted.
-
-This preserves functionality without treating IoT devices as trusted infrastructure.
+Detailed test evidence, active topology inventories, and unresolved findings are kept privately. Sanitized methodology and outcomes may be published separately.
 
 ---
 
-# VLAN 40 — GUEST
+## 8. Documentation and Change Control
 
-`GUEST` is intended for temporary or untrusted client devices.
+When a device or service changes security zone:
 
-Subnet:
+1. Establish the required trust role and dependencies.
+2. Review the intended inter-VLAN communication policy.
+3. Verify the relevant virtual-network, switching, DHCP, DNS, and access-control implications.
+4. Document the live configuration and rollback plan **privately** before making changes.
+5. Apply the change and test both permitted and prohibited paths.
+6. Update the private asset/network inventory and this public design document if the architecture has changed.
 
-```text
-192.168.40.0/24
-```
+### Public / Private Boundary
 
-The intended behavior is:
+| Suitable for public HomeOps | Maintain privately |
+|---|---|
+| VLAN IDs, names, and security purposes | Device-to-VLAN inventory and management endpoints |
+| High-level trust relationships | Exact ACL sequence and live rule objects |
+| Design rationale and service dependencies | Exact switchport configurations and network exports |
+| Sanitized validation summaries | Test captures, recovery paths, and unresolved security findings |
+| General change-control principles | Device-specific access and rollback procedures |
 
-```text
-GUEST
-  │
-  ├── Internet
-  └── DNS
-```
+Passwords, tokens, private keys, and recovery codes belong in a secrets manager, **not** in public or standard private Git documentation.
 
-without normal access to internal networks.
-
-Guest clients should not be able to initiate unrestricted traffic toward:
-
-- `INFRA`
-- `TRUSTED`
-- `IOT`
-- `GAME-DMZ`
-
----
-
-# DNS Across VLANs
-
-The homelab uses two Pi-hole DNS servers:
-
-```text
-192.168.10.90
-192.168.10.91
-```
-
-Both are located on `INFRA`.
-
-Lower-trust VLANs still require DNS, so narrow ACL exceptions permit DNS traffic to the Pi-hole pair.
-
-Conceptually:
-
-```text
-GAME-DMZ ──┐
-IOT      ──┼── DNS only ──► Pi-hole
-GUEST    ──┘
-```
-
-This avoids granting broad access to the infrastructure VLAN simply to provide DNS.
-
----
-
-# Inter-VLAN Policy
-
-The VLAN design describes the intended trust model.
-
-The implemented communication policy is enforced through Gateway ACLs on the ER605.
-
-At a high level:
-
-```text
-TRUSTED     → INFRA        allowed for administration
-GUEST       → internal     blocked
-IOT         → INFRA        blocked
-INFRA       → IOT          blocked by default
-Home Assistant → IOT       explicit exception
-GAME-DMZ    → INFRA        restricted
-```
-
-The exact rule order, permit exceptions, deny rules, and address groups are maintained in:
-
-[`acl-policy.md`](acl-policy.md)
-
----
-
-# Management VLAN Design
-
-Infrastructure management interfaces are kept on `INFRA`.
-
-Examples include:
-
-- Proxmox management
-- SG3210X-M2
-- ES216G
-- EAP670
-- Omada Controller
-- JetKVM
-
-The main exception is the ER605 management interface, which remains on `DEFAULT`.
-
-This arrangement is deliberate and reflects the current deployed state rather than an assumption that every management interface must share the same VLAN.
-
----
-
-# Switch and Trunk Design
-
-The VLANs are transported through the managed Omada switching infrastructure.
-
-Core relationships include:
-
-```text
-ER605
-  │
-  ▼
-SG3210X-M2
-  │
-  ├── pve-main
-  ├── pve-game-server
-  ├── elitedesk
-  ├── prodesk
-  ├── ES216G
-  └── EAP670
-```
-
-Proxmox hosts use trunk relationships where required so that:
-
-```text
-Host management → INFRA
-VM/LXC workload → assigned VLAN
-```
-
-The detailed port configuration belongs in:
-
-[`port-mapping.md`](port-mapping.md)
-
----
-
-# Wireless VLAN Placement
-
-The EAP670 carries the required VLANs for wireless clients.
-
-Wireless networks can therefore place clients into different trust zones rather than sharing one common LAN.
-
-The access point itself is managed on `INFRA`.
-
-Detailed SSID configuration is intentionally not duplicated here unless it becomes necessary for the architecture documentation.
-
----
-
-# mDNS and Multicast
-
-Cross-VLAN mDNS/multicast forwarding is not currently enabled.
-
-Current state:
-
-```text
-Cross-VLAN mDNS: disabled
-Multicast forwarding: not enabled as a general feature
-```
-
-This reduces automatic discovery between trust zones.
-
-If cross-VLAN discovery is required later, it should be introduced only for a defined use case rather than broadly enabling discovery between all VLANs.
-
----
-
-# DHCP
-
-Active VLANs use DHCP for normal client addressing.
-
-The general DHCP range is:
-
-```text
-.100 – .199
-```
-
-with a documented lease time of:
-
-```text
-120 minutes
-```
-
-Infrastructure systems use stable addresses where appropriate.
-
-The authoritative DHCP and addressing details belong in:
-
-[`ip-plan.md`](ip-plan.md)
-
----
-
-# Design Decisions
-
-## Separate by Trust Level
-
-The network is not segmented because every service needs its own VLAN.
-
-Instead, VLANs represent groups with similar security characteristics.
-
-For example:
-
-```text
-INFRA
-├── storage
-├── backup
-├── DNS
-├── automation
-└── management
-```
-
-These services belong together because they share a similar infrastructure trust role.
-
-Game workloads and IoT devices do not.
-
----
-
-## Trusted Administration Outside INFRA
-
-The main administration workstation resides on `TRUSTED` rather than directly on `INFRA`.
-
-This keeps:
-
-```text
-administrative client
-```
-
-separate from:
-
-```text
-server / infrastructure zone
-```
-
-while still permitting required management access.
-
----
-
-## Dedicated GAME-DMZ
-
-Externally reachable game workloads are deliberately separated from the infrastructure management plane.
-
-This provides containment without requiring a separate physical network.
-
----
-
-## Restricted IoT
-
-IoT devices receive the connectivity they require without being treated as trusted systems.
-
-Home Assistant is given the specific cross-zone access needed to control them.
-
----
-
-## Guest Isolation
-
-Guest devices are treated as untrusted by default.
-
-Internet access does not imply internal network access.
-
----
-
-## DEFAULT Is Not the Main LAN
-
-The default VLAN remains present for compatibility and specific infrastructure requirements, but it is not used as the normal trusted network.
-
-This makes the intended trust model explicit.
-
----
-
-# Validation
-
-The VLAN design should be function-tested after major changes.
-
-Representative checks include:
-
-- `TRUSTED` can reach required infrastructure
-- `GUEST` cannot reach internal networks
-- `IOT` cannot initiate unrestricted access to infrastructure
-- Home Assistant can reach required IoT devices
-- `GAME-DMZ` cannot broadly access `INFRA`
-- lower-trust VLANs can resolve DNS through Pi-hole
-- all active VLANs retain expected Internet access
-- Proxmox management remains reachable on `INFRA`
-
-The current inter-VLAN design has been function-tested.
-
----
-
-# Current State
-
-Current confirmed state:
-
-- VLAN 1 `DEFAULT`: active / restricted
-- VLAN 10 `INFRA`: active
-- VLAN 20 `TRUSTED`: active
-- VLAN 25 `GAME-DMZ`: active
-- VLAN 30 `IOT`: active
-- VLAN 40 `GUEST`: active
-- Gateway ACL segmentation: active
-- trusted administration path: active
-- Pi-hole DNS available to required VLANs
-- Home Assistant → IoT exception: active
-- guest isolation: active
-- IoT isolation: active
-- game-server isolation: active
-- cross-VLAN mDNS/multicast: not enabled
-- inter-VLAN behavior: function-tested
-
----
-
-# Roadmap
-
-Potential improvements include:
-
-- continue validating segmentation after infrastructure changes
-- review ACL exceptions as services evolve
-- introduce mDNS only if a specific use case requires it
-- keep unused switch ports disabled
-- periodically review management VLAN placement
-- continue removing old or unused network configuration
-- document wireless VLAN assignments in more detail if needed
-
----
-
-# Scope of This Document
-
-This file owns the VLAN design and trust-zone architecture:
-
-- VLAN purpose
-- trust boundaries
-- design rationale
-- zone relationships
-- management placement
-- DNS exception concept
-- Home Assistant / IoT relationship
-- GAME-DMZ reasoning
-- guest isolation
-- mDNS design state
-
-It does not own:
-
-- exact IP reservations
-- DHCP implementation details
-- Gateway ACL rule order
-- switch-port configuration
-- service-specific firewall settings
-
-Those belong in the dedicated network and service documentation.
+**Git history:** Replacing this file does not remove details from earlier public commits. History cleanup, if required, must be considered separately.
 
 ---
 
 ## Related Documentation
 
 - [`README.md`](README.md) — network overview
-- [`ip-plan.md`](ip-plan.md) — addressing and DHCP
-- [`acl-policy.md`](acl-policy.md) — implemented inter-VLAN policy
-- [`port-mapping.md`](port-mapping.md) — physical switch connectivity
-- [`../security/segmentation.md`](../security/segmentation.md) — higher-level security model
-- [`../services/pihole.md`](../services/pihole.md) — DNS
-- [`../services/home-assistant.md`](../services/home-assistant.md) — IoT control
-- [`../services/game-servers.md`](../services/game-servers.md) — GAME-DMZ workloads
+- [`ip-plan.md`](ip-plan.md) — VLAN subnets, DHCP, and DNS architecture
+- [`acl-policy.md`](acl-policy.md) — high-level inter-VLAN access policy
+- [`port-mapping.md`](port-mapping.md) — public switching and connectivity design
+- [`../security/segmentation.md`](../security/segmentation.md) — broader security and segmentation context
+- [`../services/pihole.md`](../services/pihole.md) — DNS service
+- [`../services/home-assistant.md`](../services/home-assistant.md) — home automation service
+- [`../services/game-servers.md`](../services/game-servers.md) — hosted game workloads
+
+---
+
+**Documentation status:** Public, intentionally abstracted architecture. The deployed Omada, Proxmox, and host configurations remain authoritative for current operation.

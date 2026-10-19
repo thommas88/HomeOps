@@ -1,746 +1,194 @@
-# Port Mapping
+# Switch Port Design
 
-This document defines the physical and logical switch-port mapping for the homelab.
+> **Public architecture documentation** — This file describes switch roles, link types, VLAN transport principles, and operational safeguards in the HomeOps network. It deliberately omits the live port-to-device inventory and configuration needed to administer or reconstruct the physical network.
+>
+> **Filename note:** The file remains `port-mapping.md` to preserve existing links. The authoritative, device-specific port map is maintained privately.
 
-It is the authoritative location for:
+## Purpose and Scope
 
-- Physical device-to-port connections
-- Access and trunk roles
-- Native VLANs
-- Tagged VLANs on uplinks
-- Disabled unused ports
+The homelab uses managed Ethernet switching to connect a Proxmox-based infrastructure, a routed gateway, wireless clients, and local endpoints. Different device classes require different port profiles, and VLAN membership is used to keep management traffic and application workloads logically separated.
 
-It intentionally does **not** contain:
+This public document covers:
 
-- Full IP addressing
-- DHCP reservations
-- MAC addresses
-- ACL rules
-- Credentials
-- Application configuration
+- Physical switching roles and high-level connectivity
+- Access and trunk port design
+- General VLAN transport and management-plane separation
+- Unused-port handling and configuration hygiene
+- Safe change-control and verification practices
 
-Related documentation:
+It does **not** publish physical port numbers, individual port-to-device assignments, exact native/tagged VLAN combinations on production links, live port status, MAC addresses, or device management endpoints.
 
-- [`vlan-design.md`](vlan-design.md) — VLAN purpose and trust model
-- [`ip-plan.md`](ip-plan.md) — addressing and DNS
-- [`acl-policy.md`](acl-policy.md) — inter-VLAN policy
-- [`../architecture/physical-topology.md`](../architecture/physical-topology.md) — overall physical topology
+## Switching Components
+
+| Component | Network role | Purpose |
+|---|---|---|
+| TP-Link SG3210X-M2 | Core switch | Aggregates infrastructure hosts, the gateway connection, wireless networking, and downstream switching |
+| TP-Link ES216G | Access switch | Extends wired connectivity for local endpoints and selected management devices |
+| TP-Link ER605 V2 | Gateway/router | Provides VLAN gateways, routing, DHCP, NAT, and gateway ACL enforcement |
+| TP-Link EAP670 | Wireless access point | Connects wireless clients to their assigned network zones |
+
+The switches are managed through the Omada environment. The switch model names identify the technologies used, not specific active interfaces or administrative addresses.
+
+## High-Level Topology
+
+```text
+                     ER605 V2
+                    Gateway
+                        |
+                  Core switching
+                  SG3210X-M2
+                        |
+             +----------+-----------+
+             |          |           |
+         Proxmox      EAP670     Access switch
+          hosts        Wi-Fi        ES216G
+             |          |           |
+         Hosted       Wireless     Wired
+         services     clients      endpoints
+```
+
+This is a **logical connectivity sketch**, not a wiring diagram. It intentionally excludes cable identifiers, specific switch ports, host-to-port assignments, and exact VLAN memberships on individual links.
+
+For the broader infrastructure, see [`../architecture/physical-topology.md`](../architecture/physical-topology.md).
 
 ---
 
-## Overview
+## Port Profiles
 
-The local wired network is built around two managed switches:
+### Access Ports
 
-| Switch | Role |
+An **access port** connects an endpoint that does not need to perform VLAN tagging itself. Its traffic is associated with one designated security zone at the switch.
+
+Typical endpoint categories include:
+
+- Trusted workstations and personal devices
+- Media and smart-home devices
+- Dedicated management appliances
+
+Assign each endpoint according to its function and trust level. An endpoint being physically connected to the same switch as an infrastructure host does **not** give it the same network permissions.
+
+### Trunk Ports
+
+A **trunk port** carries traffic for more than one VLAN where required by an upstream or downstream device.
+
+Trunking is used conceptually for:
+
+| Link category | Reason for trunking |
 |---|---|
-| TP-Link SG3210X-M2 | Core switch |
-| TP-Link ES216G | Secondary access switch |
+| Gateway uplink | Carry traffic for routed network zones |
+| Inter-switch uplink | Extend required VLANs to the access-switch layer |
+| Proxmox host uplink | Separate hypervisor management from hosted workload networks |
+| Wireless AP uplink | Support management and client networks on the same physical connection |
 
-The SG3210X-M2 connects the main infrastructure hosts, gateway, wireless access point, and the ES216G.
+Trunks should carry **only the VLANs required by the connected device and its approved workloads**. Avoid using an unrestricted, all-VLAN trunk as a convenience.
 
-The ES216G provides additional access ports for local client and management devices.
-
-Unused switch ports are intentionally **disabled**.
-
----
-
-# SG3210X-M2
-
-## Role
-
-The SG3210X-M2 is the primary aggregation switch for the homelab.
-
-It connects:
-
-- Administration workstation
-- Main Proxmox host
-- Game-server Proxmox host
-- EliteDesk Proxmox host
-- ProDesk Proxmox host
-- ES216G
-- EAP670
-- ER605 gateway
+The live native-VLAN choice, tagged-VLAN allowlist, and physical interface assignment for each trunk are intentionally excluded from this public document.
 
 ---
 
-## Port Map
+## Management and Workload Separation
 
-| Port | Connected Device | Port Role | Native VLAN | Tagged VLANs | Status |
-|---:|---|---|---|---|---|
-| 1 | Fractal administration PC | Access | `TRUSTED (20)` | — | Active |
-| 2 | Main Proxmox — `pve-main` | Trunk | `INFRA (10)` | Required workload VLANs | Active |
-| 3 | Game Server Proxmox — `pve-game-server` | Trunk | `INFRA (10)` | Required workload VLANs | Active |
-| 4 | EliteDesk Proxmox — `elitedesk` | Trunk | `INFRA (10)` | Required workload VLANs | Active |
-| 5 | ProDesk Proxmox — `prodesk` | Trunk | `INFRA (10)` | Required workload VLANs | Active |
-| 6 | ES216G uplink | Trunk | `DEFAULT (1)` | `INFRA (10)`, `TRUSTED (20)`, `GAME-DMZ (25)`, `IOT (30)`, `GUEST (40)` | Active |
-| 7 | EAP670 | Trunk | `INFRA (10)` | Wireless client VLANs | Active |
-| 8 | ER605 V2 | Trunk / Gateway uplink | `DEFAULT (1)` | `INFRA (10)`, `TRUSTED (20)`, `GAME-DMZ (25)`, `IOT (30)`, `GUEST (40)` | Active |
-| 9 | — | Disabled | — | — | Disabled |
-| 10 | — | Disabled | — | — | Disabled |
+Network design separates infrastructure administration from less-trusted client and service traffic.
 
----
+- **Hypervisors:** Management interfaces use the infrastructure security zone; virtual machines and containers may use separate workload VLANs.
+- **Game servers:** Application workloads are placed in the `GAME-DMZ` security zone rather than sharing management access by default.
+- **Wireless:** Client networks are associated with the appropriate security zones independently of access-point administration.
+- **Management devices:** Devices used to administer other systems are treated as sensitive infrastructure endpoints.
 
-## Port 1 — Administration Workstation
+These statements describe the **documented architecture and design intent**. They are not proof that every interface or flow is configured correctly. Inter-zone reachability depends on routing and ACL enforcement in addition to VLAN tagging.
 
-```text
-SG3210X-M2 Port 1
-        │
-        ▼
-Fractal / Fedora Workstation
-```
+The security-zone definitions are maintained in [`vlan-design.md`](vlan-design.md), and the routed access model is documented in [`acl-policy.md`](acl-policy.md).
 
-Role:
+## Unused Port Policy
 
-```text
-Access port
-```
+The source port inventory records unused ports as **disabled**. This is a documented configuration state from the source material, not a fresh verification against the switches.
 
-Native VLAN:
+Operational practice is to:
 
-```text
-TRUSTED (20)
-```
+1. Keep unused ports disabled where supported and practical.
+2. Remove obsolete access or trunk profiles before reusing an interface.
+3. Enable a port only after identifying its intended endpoint and required zone.
+4. Apply the least-permissive profile that supports the device.
+5. Verify connectivity after activation and update the private port inventory.
 
-The workstation is the primary administration client for the homelab.
+This reduces accidental misconfiguration and unnecessary physical access paths.
 
-It does not require trunking because the workstation itself belongs to the trusted client network.
+## Omada Client Identification Caveat
 
----
+A managed switch's client view does not necessarily identify the device **physically connected** to a port.
 
-## Port 2 — Main Proxmox
+When a port connects to a Proxmox hypervisor, Omada may display a hosted VM or container as the observed client because the virtual workload generates traffic through that uplink.
 
-```text
-SG3210X-M2 Port 2
-        │
-        ▼
-pve-main
-```
+For physical troubleshooting, distinguish between:
 
-Role:
+- The **physical link** and attached host
+- The **observed MAC/client** in the management interface
+- The **logical VLAN or VM interface** producing traffic
 
-```text
-Trunk
-```
-
-Native VLAN:
-
-```text
-INFRA (10)
-```
-
-The physical Proxmox host uses `INFRA` for management.
-
-Additional VLANs may be presented to virtual workloads hosted on the node.
-
-This allows the physical management interface and virtual workloads to use different network zones without requiring multiple physical NIC connections.
+The private, verified cabling inventory is the source of truth for physical connections. Controller client discovery alone should not be treated as definitive port-mapping evidence.
 
 ---
 
-## Port 3 — Game Server Proxmox
+## Change-Control Procedure
 
-```text
-SG3210X-M2 Port 3
-        │
-        ▼
-pve-game-server
-```
+Changes to switch profiles can affect production networking and remote management. A controlled procedure is particularly important for gateway uplinks, inter-switch connections, hypervisor uplinks, and access-point management.
 
-Role:
+### Before a Change
 
-```text
-Trunk
-```
+1. Identify the intended device, physical interface, and existing port profile in **private operational records**.
+2. Confirm whether access or trunk mode is required.
+3. Record existing native and tagged VLAN settings privately.
+4. Check which management paths and hosted services may depend on the link.
+5. Establish a tested rollback or local recovery method.
+6. Make one bounded change at a time.
 
-Native VLAN:
+### After a Change
 
-```text
-INFRA (10)
-```
+1. Confirm link state and expected VLAN membership.
+2. Verify the management path remains available.
+3. Test representative permitted and prohibited traffic paths, where appropriate.
+4. Verify affected services, including virtual workloads and DNS dependencies.
+5. Record results and update the **private** port map.
 
-The Proxmox management interface resides on `INFRA`.
+Do not interpret successful connectivity to one service as proof that unrelated isolation rules are enforced. Tests should correspond to the intended policy.
 
-Game-server workloads can be attached to `GAME-DMZ` through the same physical uplink.
+## Verification Boundaries
 
-Conceptually:
+The published topology describes the network at an architectural level. It does not replace:
 
-```text
-Physical Proxmox management → INFRA
-Virtual game workload       → GAME-DMZ
-```
+- A live Omada configuration review
+- A validated physical port and cable inventory
+- VLAN-tagging checks on actual interfaces
+- End-to-end connectivity and isolation testing
+- Configuration backups and a documented recovery procedure
 
-This keeps the hypervisor management plane separate from the game workload network.
-
----
-
-## Port 4 — EliteDesk Proxmox
-
-```text
-SG3210X-M2 Port 4
-        │
-        ▼
-elitedesk
-```
-
-Role:
-
-```text
-Trunk
-```
-
-Native VLAN:
-
-```text
-INFRA (10)
-```
-
-The EliteDesk currently hosts the secondary Pi-hole DNS instance.
-
-The trunk keeps Proxmox host management on `INFRA` and leaves room for workload VLANs if required later.
+Changes made in Omada after a documentation update may introduce drift. The private inventory should be reconciled against the deployed configuration when maintenance occurs.
 
 ---
 
-## Port 5 — ProDesk Proxmox
+## Public / Private Documentation Boundary
 
-```text
-SG3210X-M2 Port 5
-        │
-        ▼
-prodesk
-```
-
-Role:
-
-```text
-Trunk
-```
-
-Native VLAN:
-
-```text
-INFRA (10)
-```
-
-Tagged VLANs:
-
-```text
-Required workload VLANs
-```
-
-The ProDesk hosts infrastructure and backup workloads including:
-
-- Proxmox Backup Server
-- Pi-hole DNS 1
-- Home Assistant
-- Omada Controller
-- Homepage dashboard
-
-The physical Proxmox management interface remains on `INFRA`, while hosted workloads can use additional VLANs as required.
-
----
-
-## Port 6 — ES216G Uplink
-
-```text
-SG3210X-M2 Port 6
-        │
-        ▼
-ES216G Port 1
-```
-
-Role:
-
-```text
-Trunk
-```
-
-Native VLAN:
-
-```text
-DEFAULT (1)
-```
-
-Tagged VLANs:
-
-```text
-INFRA (10)
-TRUSTED (20)
-GAME-DMZ (25)
-IOT (30)
-GUEST (40)
-```
-
-This is the primary uplink between the core switch and the secondary access switch.
-
-The ES216G management interface resides on `INFRA`, which is transported tagged across this uplink.
-
-> **Important:** This uplink is a known management-critical path. Changes to its native VLAN, tagged VLAN membership, or management behavior should be treated as controlled changes with a rollback plan.
-
-The previous ES216G incident is documented in:
-
-[`incidents/es216g-recovery.md`](incidents/es216g-recovery.md)
-
----
-
-## Port 7 — EAP670
-
-```text
-SG3210X-M2 Port 7
-        │
-        ▼
-EAP670
-```
-
-Role:
-
-```text
-Trunk
-```
-
-Native VLAN:
-
-```text
-INFRA (10)
-```
-
-The access point management interface uses `INFRA`.
-
-Wireless client networks are transported using tagged VLANs.
-
-This allows separate wireless networks to place clients directly into the appropriate security zones.
-
----
-
-## Port 8 — ER605 Gateway
-
-```text
-SG3210X-M2 Port 8
-        │
-        ▼
-ER605 V2
-```
-
-Role:
-
-```text
-Gateway trunk
-```
-
-Native VLAN:
-
-```text
-DEFAULT (1)
-```
-
-Tagged VLANs:
-
-```text
-INFRA (10)
-TRUSTED (20)
-GAME-DMZ (25)
-IOT (30)
-GUEST (40)
-```
-
-This link carries routed VLAN traffic between the core switch and the gateway.
-
-The ER605 provides:
-
-- VLAN gateways
-- DHCP
-- Routing
-- NAT
-- Gateway ACL enforcement
-
----
-
-# ES216G
-
-## Role
-
-The ES216G is the secondary access switch.
-
-It connects downstream wired devices and uplinks to the SG3210X-M2.
-
-Unused ports are disabled.
-
----
-
-## Port Map
-
-| Port | Connected Device | Port Role | Native VLAN | Tagged VLANs | Status |
-|---:|---|---|---|---|---|
-| 1 | SG3210X-M2 port 6 | Trunk | `DEFAULT (1)` | `INFRA (10)`, `TRUSTED (20)`, `GAME-DMZ (25)`, `IOT (30)`, `GUEST (40)` | Active |
-| 2 | — | Disabled | — | — | Disabled |
-| 3 | PlayStation 5 | Access | `TRUSTED (20)` | — | Active |
-| 4 | — | Disabled | — | — | Disabled |
-| 5 | Samsung TV | Access | `IOT (30)` | — | Active |
-| 6 | — | Disabled | — | — | Disabled |
-| 7 | — | Disabled | — | — | Disabled |
-| 8 | — | Disabled | — | — | Disabled |
-| 9 | — | Disabled | — | — | Disabled |
-| 10 | — | Disabled | — | — | Disabled |
-| 11 | — | Disabled | — | — | Disabled |
-| 12 | — | Disabled | — | — | Disabled |
-| 13 | — | Disabled | — | — | Disabled |
-| 14 | — | Disabled | — | — | Disabled |
-| 15 | — | Disabled | — | — | Disabled |
-| 16 | JetKVM | Access | `INFRA (10)` | — | Active |
-
----
-
-## Port 1 — Core Uplink
-
-```text
-ES216G Port 1
-      │
-      ▼
-SG3210X-M2 Port 6
-```
-
-Role:
-
-```text
-Trunk
-```
-
-Native VLAN:
-
-```text
-DEFAULT (1)
-```
-
-Tagged VLANs:
-
-```text
-INFRA (10)
-TRUSTED (20)
-GAME-DMZ (25)
-IOT (30)
-GUEST (40)
-```
-
-The switch management interface itself uses `INFRA`.
-
-This means management traffic crosses the uplink as tagged VLAN 10 traffic.
-
----
-
-## Port 3 — PlayStation 5
-
-```text
-ES216G Port 3
-      │
-      ▼
-PlayStation 5
-```
-
-Role:
-
-```text
-Access
-```
-
-Native VLAN:
-
-```text
-TRUSTED (20)
-```
-
-The console is treated as a trusted personal client rather than as infrastructure or IoT.
-
----
-
-## Port 5 — Samsung TV
-
-```text
-ES216G Port 5
-      │
-      ▼
-Samsung TV
-```
-
-Role:
-
-```text
-Access
-```
-
-Native VLAN:
-
-```text
-IOT (30)
-```
-
-The TV belongs to the IoT security zone.
-
-It receives Internet and DNS access according to the IoT policy without unrestricted access to private internal systems.
-
----
-
-## Port 16 — JetKVM
-
-```text
-ES216G Port 16
-      │
-      ▼
-JetKVM
-```
-
-Role:
-
-```text
-Access
-```
-
-Native VLAN:
-
-```text
-INFRA (10)
-```
-
-JetKVM is treated as infrastructure because it provides remote management access to physical hardware.
-
-Its network access therefore belongs on the management/infrastructure network rather than on a normal client VLAN.
-
----
-
-# Disabled Ports
-
-All currently unused physical switch ports are disabled.
-
-This applies to:
-
-### SG3210X-M2
-
-```text
-Port 9
-Port 10
-```
-
-### ES216G
-
-```text
-Port 2
-Port 4
-Ports 6–15
-```
-
-The unused ports have not been repurposed or assigned temporary client profiles.
-
----
-
-## Why Unused Ports Are Disabled
-
-Disabling unused switch ports provides several benefits:
-
-- Prevents accidental connection to an unintended VLAN
-- Reduces unauthorized physical access paths
-- Makes active topology easier to understand
-- Reduces ambiguity during troubleshooting
-- Avoids stale access/trunk profiles on unused interfaces
-
-A port should be explicitly configured for its intended role before being enabled.
-
----
-
-# Trunk Relationships
-
-The main trunk relationships are:
-
-```text
-ER605 V2
-    │
-    │ VLAN 1, 10, 20, 25, 30, 40
-    ▼
-SG3210X-M2
-    │
-    ├── pve-main
-    ├── pve-game-server
-    ├── elitedesk
-    ├── prodesk
-    ├── EAP670
-    │
-    │ VLAN 1, 10, 20, 25, 30, 40
-    ▼
-ES216G
-```
-
-Each trunk has a different purpose:
-
-| Trunk | Purpose |
+| Public HomeOps repository | Private operational documentation |
 |---|---|
-| ER605 ↔ SG3210X-M2 | Routed VLAN uplink |
-| SG3210X-M2 ↔ ES216G | Carry VLANs to secondary switch |
-| SG3210X-M2 ↔ Proxmox hosts | Carry management and VM workload networks |
-| SG3210X-M2 ↔ EAP670 | Carry AP management and wireless client VLANs |
+| Switch models and functional roles | Actual port-to-device and cable map |
+| Access/trunk design principles | Port numbers and active per-port profiles |
+| VLAN architecture and zone intent | Exact native/tagged VLAN configuration for each link |
+| General unused-port and change-control practices | Live enabled/disabled status and configuration exports |
+| Troubleshooting concepts | Management endpoints, detailed rollback instructions, and sensitive incident data |
 
----
+Credentials, API tokens, private keys, and recovery secrets should be stored in an appropriate secrets manager—not in either version of this Markdown file.
 
-# Access-Port Relationships
-
-Access ports place normal endpoints into a single VLAN.
-
-Current examples:
-
-```text
-Fractal       → TRUSTED
-PlayStation 5 → TRUSTED
-Samsung TV    → IOT
-JetKVM        → INFRA
-```
-
-Endpoints connected to these ports do not need to understand VLAN tagging.
-
----
-
-# Management Traffic
-
-Management devices are generally placed on `INFRA`.
-
-Examples include:
-
-- Proxmox hosts
-- SG3210X-M2
-- ES216G
-- EAP670
-- JetKVM
-- Omada Controller
-
-The ER605 is the exception and retains its management interface on `DEFAULT`.
-
-The management design is documented further in [`vlan-design.md`](vlan-design.md).
-
----
-
-# Omada Client Display Caveat
-
-Omada may display a VM or LXC as the apparent connected client on a physical Proxmox switch port.
-
-For example, a port physically connected to a Proxmox host may show the name of a VM currently generating traffic.
-
-This does **not** change the physical port mapping.
-
-The authoritative physical connections are:
-
-```text
-SG3210X-M2 P2 → pve-main
-SG3210X-M2 P3 → pve-game-server
-SG3210X-M2 P4 → elitedesk
-SG3210X-M2 P5 → prodesk
-SG3210X-M2 P6 → ES216G
-```
-
-The switch-port map in this document should therefore be treated as the physical source of truth.
-
----
-
-# Change-Control Guidelines
-
-Switch-port changes can affect both client connectivity and management access.
-
-Before modifying an active port:
-
-1. Identify the physical device connected to the port.
-2. Confirm whether the port is access or trunk.
-3. Record the current native VLAN.
-4. Record all required tagged VLANs.
-5. Determine whether the port carries management traffic.
-6. Prepare a rollback path.
-7. Make one change at a time.
-8. Verify the connected device immediately afterward.
-
-Additional caution is required for:
-
-- Gateway uplinks
-- Inter-switch trunks
-- Proxmox trunks
-- AP trunks
-- Management VLAN changes
-
----
-
-## Enabling a Currently Disabled Port
-
-A disabled port should not simply be enabled with an arbitrary existing profile.
-
-Before enabling it:
-
-1. Identify the intended endpoint.
-2. Determine the correct VLAN.
-3. Decide whether the endpoint requires access or trunk mode.
-4. Apply only the VLANs required by that device.
-5. Enable the port.
-6. Verify addressing and connectivity.
-7. Update this document.
-
----
-
-# Current State
-
-Current physical switch state:
-
-- Core gateway uplink: active
-- Main Proxmox trunk: active
-- Game-server Proxmox trunk: active
-- EliteDesk Proxmox trunk: active
-- ProDesk Proxmox trunk: active
-- ES216G uplink: active
-- EAP670 trunk: active
-- Fractal access port: active
-- PlayStation 5 access port: active
-- Samsung TV access port: active
-- JetKVM access port: active
-- All unused ports: disabled
-
-The port map should be treated as implemented current state rather than a planned topology.
-
----
-
-# Public Repository Notes
-
-This document intentionally excludes:
-
-- MAC addresses
-- management credentials
-- Wi-Fi credentials
-- API tokens
-- WAN/public addressing
-- Tailscale addressing
-- cable identifiers that provide no architectural value
-
-The goal is to document the topology and VLAN behavior without exposing unnecessary device-specific information.
-
----
-
-# Scope of This Document
-
-This file owns:
-
-- Physical switch-port mapping
-- Access/trunk roles
-- Native VLAN assignments
-- Tagged VLANs on important trunks
-- Disabled-port state
-- Inter-switch relationships
-
-It does not own:
-
-- VLAN design rationale
-- IP addressing
-- DHCP
-- DNS
-- ACL rules
-- Incident details
-
----
+**Repository-history note:** Replacing the current file does not remove earlier port details from existing Git commits. If historical information needs to be removed, assess Git-history cleanup separately and account for public forks, clones, and caches.
 
 ## Related Documentation
 
-- [`README.md`](README.md) — network overview
-- [`vlan-design.md`](vlan-design.md) — VLAN design and trust model
-- [`ip-plan.md`](ip-plan.md) — addressing and DNS
-- [`acl-policy.md`](acl-policy.md) — inter-VLAN policy
-- [`incidents/es216g-recovery.md`](incidents/es216g-recovery.md) — ES216G management incident
-- [`../architecture/physical-topology.md`](../architecture/physical-topology.md) — full homelab physical topology
-- [`../architecture/logical-topology.md`](../architecture/logical-topology.md) — VM and service topology
+- [`README.md`](README.md) — network documentation overview
+- [`vlan-design.md`](vlan-design.md) — VLAN purpose and security-zone model
+- [`ip-plan.md`](ip-plan.md) — IPv4 address plan and DHCP design
+- [`acl-policy.md`](acl-policy.md) — high-level inter-VLAN access-control policy
+- [`../architecture/physical-topology.md`](../architecture/physical-topology.md) — broader physical infrastructure topology
+- [`../architecture/logical-topology.md`](../architecture/logical-topology.md) — virtual infrastructure and service relationships
+
+---
+
+**Documentation status:** Public, intentionally abstracted architecture overview. Not an authoritative live port inventory.

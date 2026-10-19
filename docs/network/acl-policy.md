@@ -1,837 +1,204 @@
-# ACL Policy
+# Network Access Control Policy
 
-This document defines the implemented access-control policy between the homelab network zones.
+> **Public documentation** — This document describes the homelab's network access-control design, trust boundaries, and recorded validation outcomes. It is not an export of the live firewall configuration and must not be used as a recovery runbook.
 
-The policy is enforced primarily through **Gateway ACLs** on the TP-Link ER605 V2 and is managed through the Omada Controller.
+## Purpose and Scope
 
-This document owns:
+The access-control policy governs **routed traffic between network security zones** in the Proxmox-based homelab. Its purpose is to limit unnecessary communication, maintain administrative access, and support services that require carefully scoped cross-zone connectivity.
 
-- Active Gateway ACL rules
-- Rule ordering
-- Permit exceptions
-- Deny rules
-- ACL object groups
-- Inter-VLAN traffic policy
-- Validation status
-- Deferred hardening
+Inter-VLAN policy is implemented primarily through **Gateway ACLs** on a TP-Link ER605 V2, managed with Omada. The gateway acts as the central enforcement point for routed traffic between VLANs.
 
-It intentionally does not duplicate the complete IP plan or switch-port configuration.
+This document covers:
 
-Related documentation:
+- Security objectives and trust boundaries
+- High-level inter-zone communication policy
+- Business and operational justification for required exceptions
+- Recorded functional validation and its limitations
+- Change-control principles
 
-- [`vlan-design.md`](vlan-design.md) — why the security zones exist
-- [`ip-plan.md`](ip-plan.md) — subnets, infrastructure addresses, DHCP, and DNS
-- [`port-mapping.md`](port-mapping.md) — switch ports and VLAN profiles
+It intentionally excludes live ACL names and sequence numbers, precise object definitions, management endpoints, device identifiers, and security-remediation details. Operational configuration and rollback information belong in **private infrastructure documentation**.
 
 ---
 
-## Policy Goals
+## Security Objectives
 
-The ACL policy implements the trust model defined in [`vlan-design.md`](vlan-design.md).
+The policy is designed to:
 
-The main goals are:
+1. Restrict the `DEFAULT` network from ordinary production use.
+2. Use `TRUSTED` as the primary source of administrative connections.
+3. Separate infrastructure services from less-trusted workloads and clients.
+4. Limit game-server workloads to the connectivity necessary for their operation.
+5. Prevent IoT and guest devices from initiating general access to private networks.
+6. Support Internet access where it is required.
+7. Provide controlled access to shared infrastructure services, including DNS.
+8. Support Home Assistant's interactions with IoT devices without generally opening the infrastructure zone.
 
-1. Keep `DEFAULT` out of normal production use.
-2. Allow `TRUSTED` to act as the administration network.
-3. Prevent `INFRA` from initiating unnecessary traffic toward lower-trust or client networks.
-4. Isolate `GAME-DMZ` from private infrastructure.
-5. Isolate `IOT` from internal systems.
-6. Isolate `GUEST` from internal systems.
-7. Preserve Internet access where required.
-8. Preserve DNS through Pi-hole using narrow exceptions.
-9. Permit Home Assistant to communicate with IoT devices without opening all of `INFRA`.
-
----
-
-## Enforcement Point
-
-Current inter-VLAN segmentation is enforced through:
-
-| ACL Type | Current Use |
-|---|---|
-| Gateway ACL | **Active** |
-| Switch ACL | Not used |
-| EAP ACL | Not used |
-
-Using the gateway as the primary policy enforcement point keeps routed inter-VLAN policy in one location.
-
-This reduces:
-
-- overlapping rule sets
-- conflicting enforcement
-- troubleshooting complexity
-- configuration drift
+These are policy objectives, not a claim that every possible network path has been exhaustively tested.
 
 ---
 
-## Network Zones
+## Network Security Zones
 
-| VLAN | Name | Security Role |
+| VLAN | Zone | Role |
 |---:|---|---|
-| 1 | `DEFAULT` | Restricted legacy/management zone |
-| 10 | `INFRA` | Servers and infrastructure |
-| 20 | `TRUSTED` | Administration and trusted clients |
+| 1 | `DEFAULT` | Restricted legacy/default zone |
+| 10 | `INFRA` | Infrastructure and hosted services |
+| 20 | `TRUSTED` | Trusted clients and administrative access |
 | 25 | `GAME-DMZ` | Game-server workloads |
 | 30 | `IOT` | Smart-home and IoT devices |
 | 40 | `GUEST` | Guest clients |
 
-Subnets and addresses are maintained in [`ip-plan.md`](ip-plan.md).
+Zone assignments reflect the different trust levels and communication requirements of the systems they contain. IP addressing is documented separately in [`ip-plan.md`](ip-plan.md).
+
+### Trust Model
+
+The design is **asymmetric**: an administrative client can initiate a connection to a managed system without giving that managed system equivalent permission to initiate unrelated connections back to the client network.
+
+Segmentation also separates externally oriented game-server workloads and lower-trust IoT/guest devices from core services. A VLAN provides a logical boundary; **ACL policy is required to control traffic routed across that boundary**.
 
 ---
 
-## Policy Model
+## Logical Communication Policy
 
-The ACL policy is intentionally asymmetric.
+The following matrix summarizes the **policy represented by the documented configuration**. It is deliberately a logical overview, not a line-by-line representation of gateway rules.
 
-For example:
-
-```text
-TRUSTED → INFRA   PERMIT
-INFRA   → TRUSTED DENY
-```
-
-The administration workstation needs to initiate connections toward infrastructure.
-
-Infrastructure systems do not automatically require the ability to initiate connections back toward trusted clients.
-
-The same principle is used for game-server administration and IoT access.
-
----
-
-## Traffic Matrix
-
-`ALLOW` means the source zone may initiate general traffic toward the destination.
-
-`BLOCK` means new connections initiated from the source are denied by policy.
-
-`DNS ONLY` means only the explicit Pi-hole DNS exception is permitted.
-
-| Source ↓ / Destination → | INFRA | TRUSTED | GAME-DMZ | IOT | GUEST | Internet |
+| Source / Destination | `INFRA` | `TRUSTED` | `GAME-DMZ` | `IOT` | `GUEST` | Internet |
 |---|---|---|---|---|---|---|
-| `DEFAULT` | BLOCK | BLOCK | BLOCK | BLOCK | BLOCK | BLOCK |
-| `INFRA` | — | BLOCK | BLOCK | BLOCK* | BLOCK | ALLOW |
-| `TRUSTED` | ALLOW | — | ALLOW | ALLOW | Not explicitly allowed | ALLOW |
-| `GAME-DMZ` | DNS ONLY | BLOCK | — | BLOCK | BLOCK | ALLOW |
-| `IOT` | DNS ONLY | BLOCK | BLOCK | — | BLOCK | ALLOW |
-| `GUEST` | DNS ONLY | BLOCK | BLOCK | BLOCK | — | ALLOW |
+| `DEFAULT` | Restrict | Restrict | Restrict | Restrict | Restrict | Restrict |
+| `INFRA` | — | Block | Block | Service exception | Block | Allow |
+| `TRUSTED` | Allow | — | Allow | Allow | Not explicitly permitted | Allow |
+| `GAME-DMZ` | DNS exception | Block | — | Block | Block | Allow |
+| `IOT` | DNS exception | Block | Block | — | Block | Allow |
+| `GUEST` | DNS exception | Block | Block | Block | — | Allow |
 
-`*` Home Assistant has an explicit `INFRA → IOT` exception.
+**How to interpret the matrix:**
 
----
+- **Allow:** General connectivity initiated by the source zone is permitted by the documented policy.
+- **Block / Restrict:** General connectivity is denied or intentionally restricted by the documented policy.
+- **DNS exception:** A limited service-specific path exists; this does not permit general access to the destination zone.
+- **Service exception:** A specific application requires connectivity across this boundary.
+- **Not explicitly permitted:** The source documentation does not establish an explicit allow; this must **not** be interpreted as a verified block.
+- **—:** Traffic remaining within a single zone is outside this inter-VLAN matrix.
 
-# Active Gateway ACL Rules
-
-The order below reflects the implemented policy.
-
-Rule order matters because specific permit exceptions must be evaluated before the broader deny rule they override.
-
----
-
-## 1. `BLOCK-DEFAULT-GATEWAY-MGMT`
-
-**Purpose:** Prevent devices on `DEFAULT` from accessing the ER605 management interface.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `DEFAULT` |
-| Destination | `Gateway Management Page` |
-
-### Rationale
-
-`DEFAULT` is not intended as an administrative client network.
-
-The gateway remains managed on this network at the addressing level, but devices placed on `DEFAULT` should not be able to use that fact as an administrative path.
+This matrix concerns **new traffic initiated by the source zone**. Return traffic and behavior within a VLAN depend on the applicable network controls. The matrix does not establish access to the gateway's own management interface.
 
 ---
 
-## 2. `BLOCK-DEFAULT-INTER-VLAN`
+## Required Service Exceptions
 
-**Purpose:** Prevent `DEFAULT` from initiating traffic toward the operational VLANs.
+### DNS for isolated zones
 
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `DEFAULT` |
-| Destination | `INFRA`, `TRUSTED`, `GAME-DMZ`, `IOT`, `GUEST` |
+IoT devices, guest clients, and game-server workloads need DNS resolution without unrestricted access to infrastructure systems. The design provides scoped access to the Pi-hole DNS service rather than opening the entire `INFRA` zone.
 
-### Rationale
+**Security rationale:** Preserve a necessary shared service while limiting the destinations and services reachable from lower-trust networks.
 
-`DEFAULT` should not function as an unrestricted fallback network.
+### Home Assistant and IoT
 
----
+Home Assistant is hosted in `INFRA` and needs to initiate communication with supported IoT devices. A targeted exception supports this application relationship without allowing general `INFRA`-to-`IOT` communication.
 
-## 3. `BLOCK-DEFAULT-INTERNET`
+**Security rationale:** Grant the application the required connectivity instead of extending that privilege to an entire infrastructure network.
 
-**Purpose:** Remove Internet access from `DEFAULT`.
+### Administrative access
 
-| Field | Value |
-|---|---|
-| Direction | `LAN → WAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `DEFAULT` |
-| Destination | `IPGroup_Any` |
+The `TRUSTED` zone serves as the primary origin for routine administration of infrastructure and supported workloads. The reverse direction does not inherit the same access automatically.
 
-### Result
+**Security rationale:** Keep administrative workflows functional while reducing unnecessary paths toward personal endpoints.
 
-`DEFAULT` is effectively restricted from:
+### Internet access
 
-- production VLANs
-- Internet access
-- gateway management
+Selected operational and lower-trust zones need outbound Internet access for service operation, downloads, or updates. Internet access does not imply unrestricted inter-VLAN access.
 
 ---
 
-## 4. `ALLOW-IOT-PIHOLE-DNS`
+## Implementation Principles
 
-**Purpose:** Allow IoT devices to use the internal Pi-hole DNS service.
+The implementation follows these principles:
 
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Permit` |
-| Protocol | `All` |
-| Source | `IOT` |
-| Destination | `PIHOLE-DNS-53` |
+- **Least privilege:** Prefer service-specific connectivity over broad inter-zone permissions.
+- **Explicit exceptions:** Allow a required dependency without weakening an entire zone boundary.
+- **Controlled evaluation:** Account for ACL evaluation order so narrowly scoped exceptions and general restrictions behave as intended.
+- **Central enforcement:** Keep routed inter-VLAN policy primarily at the gateway to simplify operational responsibility.
+- **Role-based objects:** Prefer maintainable groups and service roles over duplicating individual addresses throughout the policy.
+- **Asymmetric access:** Do not assume that permission in one direction implies permission to initiate traffic in the other direction.
 
-`PIHOLE-DNS-53` contains the two Pi-hole endpoints on DNS port 53.
-
-The corresponding infrastructure addresses are documented in [`ip-plan.md`](ip-plan.md).
-
-### Ordering Requirement
-
-This rule must remain above:
-
-```text
-BLOCK-IOT-INTER-VLAN
-```
+The exact rule sequence, object membership, protocol settings, and rollback procedures are maintained outside the public repository.
 
 ---
 
-## 5. `BLOCK-IOT-INTER-VLAN`
+## Validation Summary
 
-**Purpose:** Prevent IoT devices from initiating general connections toward the other internal zones.
+The source documentation records successful **functional checks of representative paths**. The results below summarize those recorded observations; they are **not fresh measurements performed for this rewrite**.
 
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `IOT` |
-| Destination | `INFRA`, `TRUSTED`, `GAME-DMZ`, `GUEST` |
-
-### Intended Result
-
-`IOT` retains:
-
-- Internet access
-- Pi-hole DNS
-
-but does not receive unrestricted access to private networks.
-
-### Verified
-
-- Internet access: ✅
-- Pi-hole DNS: ✅
-- `IOT → INFRA`: blocked ✅
-- `IOT → TRUSTED`: blocked ✅
-
----
-
-## 6. `ALLOW-GAME-DMZ-PIHOLE-DNS`
-
-**Purpose:** Allow game-server workloads to use Pi-hole DNS.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Permit` |
-| Protocol | `All` |
-| Source | `GAME-DMZ` |
-| Destination | `PIHOLE-DNS-53` |
-
-### Ordering Requirement
-
-This rule must remain above:
-
-```text
-BLOCK-GAME-DMZ-INTER-VLAN
-```
-
----
-
-## 7. `BLOCK-GAME-DMZ-INTER-VLAN`
-
-**Purpose:** Isolate game-server workloads from the private internal networks.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `GAME-DMZ` |
-| Destination | `INFRA`, `TRUSTED`, `IOT`, `GUEST` |
-
-### Intended Result
-
-`GAME-DMZ` retains:
-
-- Internet access
-- Pi-hole DNS
-- Playit.gg connectivity
-- game/software update access
-
-but cannot initiate unrestricted traffic toward private internal systems.
-
-### Verified
-
-- Internet access: ✅
-- Pi-hole DNS: ✅
-- `GAME-DMZ → INFRA`: blocked ✅
-- `GAME-DMZ → TRUSTED`: blocked ✅
-
----
-
-## 8. `ALLOW-GUEST-INTERNET`
-
-**Purpose:** Explicitly allow guest clients to access the Internet.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → WAN` |
-| Policy | `Permit` |
-| Protocol | `All` |
-| Source | `GUEST` |
-| Destination | `IPGroup_Any` |
-
-This rule applies only toward WAN traffic and does not grant access to internal VLANs.
-
----
-
-## 9. `ALLOW-GUEST-PIHOLE-DNS`
-
-**Purpose:** Allow guest devices to use Pi-hole DNS on `INFRA`.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Permit` |
-| Protocol | `All` |
-| Source | `GUEST` |
-| Destination | `PIHOLE-DNS-53` |
-
-### Ordering Requirement
-
-This rule must remain above:
-
-```text
-BLOCK-GUEST-INTER-VLAN
-```
-
----
-
-## 10. `BLOCK-GUEST-INTER-VLAN`
-
-**Purpose:** Prevent guest devices from initiating connections toward internal networks.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `GUEST` |
-| Destination | `INFRA`, `TRUSTED`, `GAME-DMZ`, `IOT` |
-
-### Intended Result
-
-Guests receive:
-
-- Internet access
-- Pi-hole DNS
-
-but no general access to the homelab.
-
-### Verified
-
-- DHCP/connectivity: ✅
-- Internet access: ✅
-- Pi-hole DNS: ✅
-- `GUEST → INFRA`: blocked ✅
-- `GUEST → TRUSTED`: blocked ✅
-
-### Guest Isolation Design
-
-Omada's SSID-level `Guest Network` feature is not used as the primary isolation mechanism.
-
-Isolation is instead implemented through:
-
-- VLAN 40
-- Gateway ACLs
-
-This allows the explicit Pi-hole DNS exception to remain under direct policy control.
-
----
-
-## 11. `ALLOW-TRUSTED-INTER-VLAN`
-
-**Purpose:** Establish `TRUSTED` as the administration network.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Permit` |
-| Protocol | `All` |
-| Source | `TRUSTED` |
-| Destination | `INFRA`, `GAME-DMZ`, `IOT` |
-
-### Intended Result
-
-Trusted clients can initiate administrative or required traffic toward:
-
-- infrastructure
-- game workloads
-- IoT devices
-
-The reverse directions are not automatically permitted.
-
-### Verified
-
-From the trusted administration network:
-
-- `TRUSTED → INFRA`: works ✅
-- `TRUSTED → GAME-DMZ`: works ✅
-- `TRUSTED → IOT`: works ✅
-
----
-
-## 12. `ALLOW-HA-IOT`
-
-**Purpose:** Allow Home Assistant to communicate with IoT devices.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Permit` |
-| Protocol | `All` |
-| Source | `HOME-ASSISTANT` |
-| Destination | `IOT` |
-
-`HOME-ASSISTANT` is an IP/object group representing only the Home Assistant service.
-
-Its address is documented in [`ip-plan.md`](ip-plan.md).
-
-### Ordering Requirement
-
-This rule must remain above:
-
-```text
-BLOCK-INFRA-TO-IOT
-```
-
-### Rationale
-
-Only Home Assistant requires this broad service relationship.
-
-Allowing the whole `INFRA` network to initiate traffic toward `IOT` would be wider than necessary.
-
-### Verified
-
-- Home Assistant → IoT control: works ✅
-- Other `INFRA → IOT` traffic: blocked ✅
-
----
-
-## 13. `BLOCK-INFRA-TO-TRUSTED-GUEST`
-
-**Purpose:** Prevent infrastructure systems from initiating connections toward user and guest networks.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `INFRA` |
-| Destination | `TRUSTED`, `GUEST` |
-
-### Rationale
-
-The relationship is intentionally asymmetric:
-
-```text
-TRUSTED → INFRA   permitted
-INFRA   → TRUSTED denied
-```
-
-Trusted systems can administer infrastructure without automatically allowing infrastructure services to initiate connections toward personal endpoints.
-
-### Verified
-
-- `INFRA → TRUSTED`: blocked ✅
-- `TRUSTED → INFRA`: works ✅
-
----
-
-## 14. `BLOCK-INFRA-TO-IOT`
-
-**Purpose:** Prevent general infrastructure systems from initiating connections toward IoT devices.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `INFRA` |
-| Destination | `IOT` |
-
-### Exception
-
-Home Assistant is permitted by:
-
-```text
-ALLOW-HA-IOT
-```
-
-which must appear before this deny rule.
-
-### Verified
-
-- General `INFRA → IOT`: blocked ✅
-- Home Assistant → IoT: works ✅
-
----
-
-## 15. `BLOCK-INFRA-TO-GAME-DMZ`
-
-**Purpose:** Prevent infrastructure systems from initiating general connections toward game-server workloads.
-
-| Field | Value |
-|---|---|
-| Direction | `LAN → LAN` |
-| Policy | `Deny` |
-| Protocol | `All` |
-| Source | `INFRA` |
-| Destination | `GAME-DMZ` |
-
-### Rationale
-
-Administration of the game environment should originate from `TRUSTED`, not from arbitrary infrastructure systems.
-
-This maintains separation between private infrastructure and externally oriented workloads.
-
-### Verified
-
-- `INFRA → GAME-DMZ`: blocked ✅
-- `TRUSTED → GAME-DMZ`: works ✅
-
----
-
-# Rule Order
-
-The active Gateway ACL order is:
-
-| Index | Rule | Policy |
-|---:|---|---|
-| 1 | `BLOCK-DEFAULT-GATEWAY-MGMT` | Deny |
-| 2 | `BLOCK-DEFAULT-INTER-VLAN` | Deny |
-| 3 | `BLOCK-DEFAULT-INTERNET` | Deny |
-| 4 | `ALLOW-IOT-PIHOLE-DNS` | Permit |
-| 5 | `BLOCK-IOT-INTER-VLAN` | Deny |
-| 6 | `ALLOW-GAME-DMZ-PIHOLE-DNS` | Permit |
-| 7 | `BLOCK-GAME-DMZ-INTER-VLAN` | Deny |
-| 8 | `ALLOW-GUEST-INTERNET` | Permit |
-| 9 | `ALLOW-GUEST-PIHOLE-DNS` | Permit |
-| 10 | `BLOCK-GUEST-INTER-VLAN` | Deny |
-| 11 | `ALLOW-TRUSTED-INTER-VLAN` | Permit |
-| 12 | `ALLOW-HA-IOT` | Permit |
-| 13 | `BLOCK-INFRA-TO-TRUSTED-GUEST` | Deny |
-| 14 | `BLOCK-INFRA-TO-IOT` | Deny |
-| 15 | `BLOCK-INFRA-TO-GAME-DMZ` | Deny |
-
----
-
-## Ordering Dependencies
-
-The most important ordering relationships are:
-
-```text
-ALLOW-IOT-PIHOLE-DNS
-    before
-BLOCK-IOT-INTER-VLAN
-```
-
-```text
-ALLOW-GAME-DMZ-PIHOLE-DNS
-    before
-BLOCK-GAME-DMZ-INTER-VLAN
-```
-
-```text
-ALLOW-GUEST-PIHOLE-DNS
-    before
-BLOCK-GUEST-INTER-VLAN
-```
-
-```text
-ALLOW-HA-IOT
-    before
-BLOCK-INFRA-TO-IOT
-```
-
-These permit rules are exceptions to broader deny rules.
-
-Changing their order can break required services while leaving the overall network superficially reachable.
-
----
-
-# ACL Object Groups
-
-The ACL design uses named groups so policy refers to services and roles instead of scattering raw addresses throughout every rule.
-
-## `PIHOLE-DNS-53`
-
-Represents:
-
-- Pi-hole 1
-- Pi-hole 2
-- DNS port 53
-
-Used by:
-
-- `ALLOW-IOT-PIHOLE-DNS`
-- `ALLOW-GAME-DMZ-PIHOLE-DNS`
-- `ALLOW-GUEST-PIHOLE-DNS`
-
-The current Pi-hole addresses are maintained in [`ip-plan.md`](ip-plan.md).
-
----
-
-## `HOME-ASSISTANT`
-
-Represents only the Home Assistant service.
-
-Used by:
-
-```text
-ALLOW-HA-IOT
-```
-
-The current address is maintained in [`ip-plan.md`](ip-plan.md).
-
----
-
-## `IPGroup_Any`
-
-Used where an ACL applies broadly toward WAN/Internet destinations.
-
-Examples:
-
-- `BLOCK-DEFAULT-INTERNET`
-- `ALLOW-GUEST-INTERNET`
-
----
-
-# Validation
-
-The policy has been function-tested across the primary security boundaries.
-
-| Test | Expected | Result |
+| Control area | Documented check | Recorded outcome |
 |---|---|---|
-| `IOT → Internet` | Allow | ✅ |
-| `IOT → Pi-hole DNS` | Allow | ✅ |
-| `IOT → INFRA` | Block | ✅ |
-| `IOT → TRUSTED` | Block | ✅ |
-| `GAME-DMZ → Internet` | Allow | ✅ |
-| `GAME-DMZ → Pi-hole DNS` | Allow | ✅ |
-| `GAME-DMZ → INFRA` | Block | ✅ |
-| `GAME-DMZ → TRUSTED` | Block | ✅ |
-| `GUEST → Internet` | Allow | ✅ |
-| `GUEST → Pi-hole DNS` | Allow | ✅ |
-| `GUEST → INFRA` | Block | ✅ |
-| `GUEST → TRUSTED` | Block | ✅ |
-| `TRUSTED → INFRA` | Allow | ✅ |
-| `TRUSTED → GAME-DMZ` | Allow | ✅ |
-| `TRUSTED → IOT` | Allow | ✅ |
-| General `INFRA → TRUSTED` | Block | ✅ |
-| General `INFRA → IOT` | Block | ✅ |
-| Home Assistant → `IOT` | Allow | ✅ |
-| General `INFRA → GAME-DMZ` | Block | ✅ |
+| Isolated-zone connectivity | IoT, guest, and game-server zones can access needed Internet services | Passed |
+| Shared DNS | Those zones can reach Pi-hole DNS | Passed |
+| Internal segmentation | Attempts from IoT, guest, and game-server zones toward restricted internal zones | Blocked as intended |
+| Administrative access | `TRUSTED` can initiate required connections to infrastructure and managed workloads | Passed |
+| Reverse-path restriction | General `INFRA`-initiated access to selected client and workload zones | Blocked as intended |
+| Application exception | Home Assistant can communicate with IoT devices | Passed |
+| Exception isolation | General infrastructure-to-IoT access remains restricted | Passed |
 
-The validation focuses on actual policy behavior rather than merely confirming that ACL objects exist in Omada.
+### Validation Limits
+
+The recorded checks support the behavior of the **tested paths**; they do not prove universal isolation or complete hardening. In particular, they do not, by themselves, establish:
+
+- Protection of every management-plane endpoint
+- Every protocol, port, device, and rule interaction
+- Layer-2 isolation between devices on the same VLAN
+- IPv6 filtering, host-based firewall behavior, or all alternative routing paths
+- Continued correctness following future configuration changes
+
+Test procedures, timestamps, evidence, and any unresolved findings should be tracked in private operational or assessment records. Publish sanitized test evidence separately when useful for demonstrating the methodology.
 
 ---
 
-# Deferred Hardening
+## Change Management
 
-The current policy is operational and stable.
+ACL changes can affect multiple workloads at once. Changes should follow a predictable process:
 
-Several possible hardening steps have intentionally been deferred.
+1. Define the service requirement and required source/destination roles.
+2. Check whether the communication path is already permitted.
+3. Select the narrowest practical exception.
+4. Review rule interactions and ordering before applying the change.
+5. Record the existing configuration and a rollback procedure **privately**.
+6. Apply one logical change at a time.
+7. Test both a path that **must work** and a path that **must remain restricted**.
+8. Update the relevant public design notes without exposing operational secrets or unnecessary implementation details.
 
-## Gateway Management Isolation
-
-Additional restrictions may later be added for:
-
-```text
-IOT      → Gateway Management Page
-GAME-DMZ → Gateway Management Page
-GUEST    → Gateway Management Page
-```
-
-These changes were deferred because management-path changes carry higher operational risk and should be introduced separately with rollback planning.
+Changes to administrative access should be treated as particularly sensitive because an incorrect policy can interrupt remote management. Specific recovery paths and outstanding hardening work are recorded privately.
 
 ---
 
-## TRUSTED → GUEST
+## Documentation Boundaries
 
-`TRUSTED → GUEST` is not explicitly permitted as part of the current policy.
+### Appropriate for this public document
 
-A stricter explicit isolation rule may be added later if complete guest separation from the administrative network is required.
+- Zone purpose and trust model
+- High-level traffic policy and required service dependencies
+- Design rationale and access-control principles
+- Sanitized validation summaries and methodology
+- General change-management practice
 
----
+### Keep in private operational documentation
 
-## mDNS / Multicast
+- Exact active ACL inventory, object definitions, and rule order
+- Management IPs, device identities, and access paths
+- Switchport-level enforcement details and configuration exports
+- Unresolved vulnerabilities, exceptions, and remediation plans
+- Detailed test logs or captures that identify infrastructure endpoints
+- Configuration backup and recovery procedures
 
-Cross-VLAN discovery is not currently part of the ACL design.
-
-If services such as Chromecast, smart speakers, or TVs require discovery across `TRUSTED` and `IOT`, mDNS/multicast should be implemented as a controlled service requirement rather than by weakening the general segmentation policy.
-
----
-
-# Change-Control Rules
-
-ACL changes can affect multiple services at once.
-
-The following process should be used:
-
-1. Identify the exact required communication path.
-2. Confirm the current source and destination zones.
-3. Determine whether an existing rule already covers the requirement.
-4. Prefer a narrow permit exception over a broad allow rule.
-5. Place the exception above its corresponding deny rule.
-6. Apply one policy change at a time.
-7. Test both the intended allowed path and at least one path that should remain blocked.
-8. Record the change in documentation.
-
----
-
-## Example
-
-If a new service on `INFRA` requires access to a specific IoT device, the preferred approach is:
-
-```text
-specific INFRA service
-        │
-        ▼
-specific required IOT service
-        │
-        PERMIT
-        ▼
-general INFRA → IOT DENY
-```
-
-The preferred approach is **not**:
-
-```text
-INFRA → IOT ALLOW ALL
-```
-
----
-
-# Security Interpretation
-
-The implemented ACL model follows several broader principles.
-
-### Least Privilege
-
-Only the communication paths required by a service are opened.
-
-### Zone Separation
-
-Devices are assigned to security zones based on role and trust level.
-
-### Asymmetric Administration
-
-Trusted clients can administer infrastructure without automatically giving infrastructure equivalent access back.
-
-### Management-Plane Protection
-
-Hypervisor and infrastructure management remain separate from game workloads and IoT networks.
-
-### Defense in Depth
-
-VLANs create logical separation while Gateway ACLs determine which routed communication is allowed between them.
-
----
-
-# Current Status
-
-The Gateway ACL policy is implemented and operational.
-
-Current state:
-
-- `DEFAULT` isolation: ✅
-- `IOT` isolation: ✅
-- `GAME-DMZ` isolation: ✅
-- `GUEST` isolation: ✅
-- `TRUSTED` administration path: ✅
-- `INFRA` outbound restrictions: ✅
-- Pi-hole DNS exceptions: ✅
-- Home Assistant → IoT exception: ✅
-- Core policy paths function-tested: ✅
-
-Switch ACLs and EAP ACLs are currently empty.
-
----
-
-# Public Repository Notes
-
-This document describes policy logic but intentionally excludes:
-
-- credentials
-- device passwords
-- API tokens
-- private keys
-- MAC addresses
-- public/WAN addressing
-- Tailscale addressing
-- SSID credentials
-
-Private RFC1918 addresses are maintained in [`ip-plan.md`](ip-plan.md) where they are required to understand the internal architecture.
-
----
-
-# Scope of This Document
-
-This file is the authoritative location for the **implemented ACL policy**.
-
-It owns:
-
-- rule definitions
-- rule order
-- object-group purpose
-- traffic matrix
-- validation
-- deferred ACL hardening
-
-It does not own:
-
-- VLAN design rationale
-- full IP addressing
-- DHCP configuration
-- physical switch ports
-- incident recovery history
+**Credentials, private keys, tokens, and recovery codes must be stored in an appropriate secrets manager—not in a public or ordinary private Git repository.**
 
 ---
 
 ## Related Documentation
 
-- [`README.md`](README.md) — network overview
-- [`vlan-design.md`](vlan-design.md) — VLAN trust model and rationale
-- [`ip-plan.md`](ip-plan.md) — addressing and DNS
-- [`port-mapping.md`](port-mapping.md) — physical/logical switch-port configuration
-- [`incidents/es216g-recovery.md`](incidents/es216g-recovery.md) — ES216G incident and recovery
-- [`../security/segmentation.md`](../security/segmentation.md) — homelab security perspective
+- [`README.md`](README.md) — Network architecture overview
+- [`vlan-design.md`](vlan-design.md) — Security-zone design and rationale
+- [`ip-plan.md`](ip-plan.md) — Addressing and DNS design
+- [`port-mapping.md`](port-mapping.md) — Physical and logical connectivity
+- [`../security/segmentation.md`](../security/segmentation.md) — Segmentation security perspective
+
+> **Repository consistency:** Other network documents should follow the same public/private information boundary. Links above are retained for compatibility; they do not imply that every linked document has already been sanitized.
